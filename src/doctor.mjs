@@ -26,7 +26,7 @@ export async function doctor(cfg, log) {
 
   const [code, ...lead] = cfg.host.codeCommand;
   const v = await run(code, [...lead, '--version'], { timeoutMs: 30000 });
-  v.code === 0 ? pass(`${code} ${v.stdout.split(/\r?\n/)[0]}`) : fail(`\`${code} --version\` failed; set host.codeCommand`);
+  v.code === 0 ? pass(`VS Code CLI (${path.basename(code)}) ${v.stdout.split(/\r?\n/)[0]}`) : fail(`\`${code} --version\` failed; set host.codeCommand`);
 
   if (exists(cfg.host.tokenFile)) {
     if (!isWindows && (fs.statSync(cfg.host.tokenFile).mode & 0o077)) fail(`token file ${cfg.host.tokenFile} is readable by others (chmod 600)`);

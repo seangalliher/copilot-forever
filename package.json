@@ -4,6 +4,11 @@
   "description": "Keep one long-lived GitHub Copilot agent session running for days: a standalone VS Code agent host that survives editor restarts, plus automatic event-log trims at agent-chosen safe points.",
   "license": "MIT",
   "author": "Sean Galliher",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/seangalliher/copilot-forever.git"
+  },
+  "homepage": "https://github.com/seangalliher/copilot-forever#readme",
   "type": "module",
   "bin": {
     "copilot-forever": "bin/copilot-forever.mjs"

@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+        node: [22, 24]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
+      - name: CLI smoke (dry runs)
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/repo"
+          node bin/copilot-forever.mjs --help
+          node bin/copilot-forever.mjs init --repo "$RUNNER_TEMP/repo" --config "$RUNNER_TEMP/cf.json" --dry-run
+          node -e "require('fs').writeFileSync(process.argv[1], JSON.stringify({ repoFolder: process.argv[2], stateDir: process.argv[3] }))" "$RUNNER_TEMP/cf.json" "$RUNNER_TEMP/repo" "$RUNNER_TEMP/state"
+          node bin/copilot-forever.mjs install --dry-run --config "$RUNNER_TEMP/cf.json"
+          node bin/copilot-forever.mjs uninstall --dry-run --config "$RUNNER_TEMP/cf.json"
+          node bin/copilot-forever.mjs snippet --config "$RUNNER_TEMP/cf.json" > /dev/null

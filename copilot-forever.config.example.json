@@ -1,0 +1,41 @@
+{
+  "repoFolder": "/path/to/your/repo",
+  "agentFile": ".github/agents/orchestrator.agent.md",
+  "instanceName": "copilot-forever",
+  "copilotHome": "~/.copilot",
+  "stateDir": "~/.copilot-forever",
+  "host": {
+    "codeCommand": "code",
+    "port": 47801,
+    "tokenFile": "~/.copilot-forever/token.txt",
+    "startTimeoutSeconds": 180,
+    "passEnv": [],
+    "startVia": "auto"
+  },
+  "trim": {
+    "thresholdMiB": 400,
+    "archiveDir": "~/.copilot/session-archive"
+  },
+  "watch": {
+    "intervalMinutes": 10,
+    "quietSeconds": 120,
+    "idleRecheckSeconds": 90,
+    "runtimeExitTimeoutSeconds": 60,
+    "continueDelaySeconds": 20,
+    "continueTries": 3,
+    "continueRetrySeconds": 30,
+    "continueTimeoutSeconds": 180
+  },
+  "files": {
+    "status": "logs/session-log-status.json",
+    "request": "logs/trim-request.json",
+    "history": "logs/trim-history",
+    "handoff": "logs/agent-handoff.md"
+  },
+  "continueText": "Continue. Your session log was just trimmed to its latest compaction after you stopped for a log trim. Resume from the latest addendum in {handoff}.",
+  "notify": true,
+  "copilot": {
+    "supportedMajors": [1],
+    "knownLogVersions": [1]
+  }
+}

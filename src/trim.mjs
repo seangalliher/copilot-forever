@@ -123,6 +123,11 @@ export function trimSession({ sessionStateDir, archiveDir, sessionId, copyTo, dr
   fs.mkdirSync(archDir, { recursive: true, mode: 0o700 });
   const archive = path.join(archDir, `events-${stampUtc()}.jsonl`);
   fs.copyFileSync(file, archive, fs.constants.COPYFILE_EXCL);
+  // The archive is a full transcript: owner-only on macOS/Linux (Windows: inherits the profile ACL).
+  if (process.platform !== 'win32') {
+    fs.chmodSync(archDir, 0o700);
+    fs.chmodSync(archive, 0o600);
+  }
   if (fs.statSync(archive).size !== before) throw new Error(`archive copy ${archive} is incomplete; log left untouched`);
   log.info(`archived full log: ${archive}`);
   // Re-check the log is unchanged since it was read (nothing appended while we worked).
