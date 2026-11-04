@@ -54,6 +54,21 @@ export const DEFAULTS = Object.freeze({
   continueText:
     'Continue. Your session log was just trimmed to its latest compaction after you stopped for a log trim. ' +
     'Resume from the latest addendum in {handoff}.',
+  // Network resume: continue the agent when its last turn died on a network error and the model
+  // API answers again. See src/resume.mjs.
+  resume: {
+    enabled: true,
+    quietMinutes: 15,
+    retryMinutes: 20,
+    maxTries: 3,
+    maxPerDay: 8, // continues across all errors in 24 hours
+    apiHost: null, // default: the host in the error message, else api.githubcopilot.com
+    apiPort: 443,
+    probeTimeoutSeconds: 5,
+    text:
+      'Continue. Your last turn failed on a network error at {time} and the connection is back. ' +
+      'Check where you were (git state, running work, the latest addendum in {handoff}) before resuming.',
+  },
   notify: true,
   // Refuse to trim when `copilot --version` reports a major version other than these.
   copilot: {
@@ -112,6 +127,15 @@ export function validate(cfg) {
   if (cfg.watch.continueTries < 1) p.push('watch.continueTries must be at least 1');
   for (const k of ['status', 'request', 'history', 'handoff']) if (typeof cfg.files[k] !== 'string' || !cfg.files[k]) p.push(`files.${k} must be a path`);
   if (typeof cfg.continueText !== 'string' || !cfg.continueText.trim()) p.push('continueText must be non-empty');
+  const r = cfg.resume;
+  if (typeof r.enabled !== 'boolean') p.push('resume.enabled must be true or false');
+  for (const k of ['quietMinutes', 'retryMinutes', 'maxTries', 'maxPerDay', 'probeTimeoutSeconds']) if (!isPosInt(r[k])) p.push(`resume.${k} must be a non-negative integer`);
+  if (r.maxTries < 1) p.push('resume.maxTries must be at least 1');
+  if (r.maxPerDay < 1) p.push('resume.maxPerDay must be at least 1');
+  if (r.probeTimeoutSeconds < 1) p.push('resume.probeTimeoutSeconds must be at least 1');
+  if (!Number.isInteger(r.apiPort) || r.apiPort < 1 || r.apiPort > 65535) p.push('resume.apiPort must be an integer 1-65535');
+  if (r.apiHost !== null && (typeof r.apiHost !== 'string' || !r.apiHost)) p.push('resume.apiHost must be a host name or null');
+  if (typeof r.text !== 'string' || !r.text.trim()) p.push('resume.text must be non-empty');
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(cfg.instanceName)) p.push('instanceName may use letters, digits, . _ - (max 64)');
   return p;
 }
@@ -150,6 +174,7 @@ export function resolveConfig(raw, baseDir, file = null) {
   cfg.logFile = path.join(cfg.stateDir, 'logs', 'copilot-forever.log');
   cfg.hostLogFile = path.join(cfg.stateDir, 'logs', `host-${cfg.instanceName}.log`);
   cfg.lockFile = path.join(cfg.stateDir, `watch-${cfg.instanceName}.lock`);
+  cfg.resumeStateFile = path.join(cfg.stateDir, `resume-${cfg.instanceName}.json`);
   cfg.installMarker = path.join(cfg.stateDir, `installed-${cfg.instanceName}.json`);
   return cfg;
 }

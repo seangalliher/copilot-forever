@@ -13,6 +13,7 @@ All notable changes to this project are documented here. The format follows [Kee
 - The Orchestrator accepts a goal pasted into the chat and saves it to `.goal-loop/GOAL.md`.
 - Demo (`demo/`): the LoopBoard goal, reproduction steps for both modes, a demo config, and the video script.
 - README: "Persistent session or Ralph loop?" comparison.
+- **Network resume**: when the session's last turn died on a network error (DNS, connection, timeout, 5xx), the watcher sends a continue once the model API answers again. Never after auth, quota, rate-limit, policy, cancel or unrecognised errors; at most `resume.maxTries` continues per error and `resume.maxPerDay` across errors, then one notification. Configured under `resume`.
 
 ### Changed
 

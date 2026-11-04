@@ -2,6 +2,8 @@
 //
 // Every run:  finds the long-lived session on the standalone host and writes the status file
 //             (session id, AHP session URI, log size, trim_due).
+// Resume run: when no trim is requested and the last turn died on a network error, sends a
+//             continue once the model API answers again (src/resume.mjs).
 // Trim run:   only when the agent has written the request file at a safe point and stopped.
 //             If the session is idle on two checks apart, it stops the host, trims the log
 //             (archiving the full log first), restarts the host, sends the continue message over
@@ -13,6 +15,7 @@ import { continueSession, connect, findSessionUri } from './ahp.mjs';
 import { continueMessage } from './config.mjs';
 import { agentPs, activeRepoSessions, findStandaloneHost, readToken, startHost, stopHost } from './host.mjs';
 import { notify } from './notify.mjs';
+import { maybeResume } from './resume.mjs';
 import { isListening, pidAlive, processTable } from './proc.mjs';
 import { checkSchema, readEvents } from './schema.mjs';
 import { checkVersions, findSession, notIdleReason, readFirstEvent } from './session.mjs';
@@ -126,7 +129,14 @@ async function watchInner(cfg, log, { dryRun, force }) {
   const st = statusObject(cfg, session, ahpSession, session.size);
   if (dryRun) log.info(`status would be: ${JSON.stringify(st)}`);
   else writeJsonAtomic(cfg.files.status, st);
-  if (!request) return { state: 'status', status: st };
+  if (!request) {
+    const resume = await maybeResume(cfg, log, {
+      hostInfo, session, ahpSession, dryRun,
+      send: (text) => sendContinue(cfg, log, ahpSession, text),
+      notify: (title, body) => notify(cfg, log, title, body),
+    });
+    return { state: 'status', status: st, resume };
+  }
 
   // ---- trim run ------------------------------------------------------------------------------
   log.info(`trim requested for ${session.id} (${st.size_mib} MiB, runtime ${session.runtimePid}, host ${hostPid})`);

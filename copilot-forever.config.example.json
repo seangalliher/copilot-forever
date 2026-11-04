@@ -33,6 +33,17 @@
     "handoff": "logs/agent-handoff.md"
   },
   "continueText": "Continue. Your session log was just trimmed to its latest compaction after you stopped for a log trim. Resume from the latest addendum in {handoff}.",
+  "resume": {
+    "enabled": true,
+    "quietMinutes": 15,
+    "retryMinutes": 20,
+    "maxTries": 3,
+    "maxPerDay": 8,
+    "apiHost": null,
+    "apiPort": 443,
+    "probeTimeoutSeconds": 5,
+    "text": "Continue. Your last turn failed on a network error at {time} and the connection is back. Check where you were (git state, running work, the latest addendum in {handoff}) before resuming."
+  },
   "notify": true,
   "copilot": {
     "supportedMajors": [1],
