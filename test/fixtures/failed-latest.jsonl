@@ -1,0 +1,21 @@
+{"type":"session.start","data":{"sessionId":"00000000-0000-4000-8000-000000000001","version":1,"producer":"copilot-agent","copilotVersion":"1.0.100","startTime":"2026-11-01T00:00:00Z","selectedModel":"model-a","context":{"cwd":"/repo"}},"id":"e001","timestamp":"2026-11-01T00:00:01.000Z","parentId":null}
+{"type":"session.permissions_changed","data":{"allowAllPermissions":true},"id":"e002","timestamp":"2026-11-01T00:00:02.000Z","parentId":"e001"}
+{"type":"subagent.selected","data":{"agentName":"orchestrator","agentDisplayName":"Orchestrator","tools":[]},"id":"e003","timestamp":"2026-11-01T00:00:03.000Z","parentId":"e002"}
+{"type":"user.message","data":{"content":"one"},"id":"e004","timestamp":"2026-11-01T00:00:04.000Z","parentId":"e003"}
+{"type":"assistant.turn_start","data":{"turnId":"t4"},"id":"e005","timestamp":"2026-11-01T00:00:05.000Z","parentId":"e004"}
+{"type":"assistant.message","data":{"content":"reply to one"},"id":"e006","timestamp":"2026-11-01T00:00:06.000Z","parentId":"e005"}
+{"type":"assistant.turn_end","data":{"turnId":"t6"},"id":"e007","timestamp":"2026-11-01T00:00:07.000Z","parentId":"e006"}
+{"type":"session.compaction_start","data":{"trigger":"threshold","currentTokens":1000,"tokenLimit":800},"id":"e008","timestamp":"2026-11-01T00:00:08.000Z","parentId":"e007"}
+{"type":"session.truncation","data":{"tokenLimit":800},"id":"e009","timestamp":"2026-11-01T00:00:09.000Z","parentId":"e008"}
+{"type":"session.compaction_complete","data":{"success":true,"summaryContent":"summary of earlier work","checkpointNumber":1},"id":"e010","timestamp":"2026-11-01T00:00:10.000Z","parentId":"e009"}
+{"type":"user.message","data":{"content":"two"},"id":"e011","timestamp":"2026-11-01T00:00:11.000Z","parentId":"e010"}
+{"type":"assistant.turn_start","data":{"turnId":"t11"},"id":"e012","timestamp":"2026-11-01T00:00:12.000Z","parentId":"e011"}
+{"type":"assistant.message","data":{"content":"reply to two"},"id":"e013","timestamp":"2026-11-01T00:00:13.000Z","parentId":"e012"}
+{"type":"assistant.turn_end","data":{"turnId":"t13"},"id":"e014","timestamp":"2026-11-01T00:00:14.000Z","parentId":"e013"}
+{"type":"session.compaction_start","data":{"trigger":"threshold","currentTokens":1000,"tokenLimit":800},"id":"e015","timestamp":"2026-11-01T00:00:15.000Z","parentId":"e014"}
+{"type":"session.truncation","data":{"tokenLimit":800},"id":"e016","timestamp":"2026-11-01T00:00:16.000Z","parentId":"e015"}
+{"type":"session.compaction_complete","data":{"success":false,"error":"compaction failed"},"id":"e017","timestamp":"2026-11-01T00:00:17.000Z","parentId":"e016"}
+{"type":"user.message","data":{"content":"three"},"id":"e018","timestamp":"2026-11-01T00:00:18.000Z","parentId":"e017"}
+{"type":"assistant.turn_start","data":{"turnId":"t18"},"id":"e019","timestamp":"2026-11-01T00:00:19.000Z","parentId":"e018"}
+{"type":"assistant.message","data":{"content":"reply to three"},"id":"e020","timestamp":"2026-11-01T00:00:20.000Z","parentId":"e019"}
+{"type":"assistant.turn_end","data":{"turnId":"t20"},"id":"e021","timestamp":"2026-11-01T00:00:21.000Z","parentId":"e020"}

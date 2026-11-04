@@ -1,0 +1,43 @@
+{
+  "name": "copilot-forever",
+  "version": "0.1.0",
+  "description": "Keep one long-lived GitHub Copilot agent session running for days: a standalone VS Code agent host that survives editor restarts, plus automatic event-log trims at agent-chosen safe points.",
+  "license": "MIT",
+  "author": "Sean Galliher",
+  "type": "module",
+  "bin": {
+    "copilot-forever": "bin/copilot-forever.mjs"
+  },
+  "files": [
+    "bin",
+    "src",
+    "agent",
+    "copilot-forever.config.example.json",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p jsconfig.json",
+    "test": "node --test --test-concurrency=1 \"test/*.test.mjs\"",
+    "check": "npm run build && npm test"
+  },
+  "keywords": [
+    "github-copilot",
+    "copilot-cli",
+    "vscode",
+    "agent-host-protocol",
+    "long-running-agent"
+  ],
+  "dependencies": {
+    "@microsoft/agent-host-protocol": "1.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0",
+    "ws": "^8.18.0"
+  }
+}
