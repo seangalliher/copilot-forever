@@ -1,0 +1,36 @@
+{
+  "models": {
+    "orchestrator": "claude-sonnet-5.5",
+    "architect": "claude-opus-5.5",
+    "builder": "claude-sonnet-5.5",
+    "reviewer": "gpt-6.1-sol",
+    "reviewerFallback": "gpt-6-luna"
+  },
+  "gate": {
+    "command": "npm test",
+    "timeoutMinutes": 30
+  },
+  "tests": {
+    "focused": "npm test -- <test file>"
+  },
+  "caps": {
+    "maxIssuesPerPlan": 12,
+    "maxBatchesPerRun": 8,
+    "maxBatchSize": 3,
+    "maxReviewRounds": 3,
+    "maxDiscoveredIssuesPerRun": 3
+  },
+  "github": {
+    "branchPrefix": "goal-loop/",
+    "mergePolicy": "human",
+    "labels": {
+      "queue": "goal-loop",
+      "inProgress": "goal-loop:in-progress",
+      "needsHuman": "goal-loop:needs-human"
+    }
+  },
+  "keepAlive": {
+    "port": 47801,
+    "thresholdMiB": 400
+  }
+}

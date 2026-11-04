@@ -35,3 +35,6 @@ jobs:
           node bin/copilot-forever.mjs install --dry-run --config "$RUNNER_TEMP/cf.json"
           node bin/copilot-forever.mjs uninstall --dry-run --config "$RUNNER_TEMP/cf.json"
           node bin/copilot-forever.mjs snippet --config "$RUNNER_TEMP/cf.json" > /dev/null
+          git init -q "$RUNNER_TEMP/app"
+          node bootstrap.mjs --repo "$RUNNER_TEMP/app" --dry-run --no-install
+          node bin/copilot-forever.mjs goal-loop --repo "$RUNNER_TEMP/app" --dry-run --no-install

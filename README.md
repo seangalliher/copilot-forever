@@ -1,13 +1,34 @@
 # copilot-forever
 
-Keep **one** GitHub Copilot agent session, such as an orchestrator custom agent in VS Code's Agents window, running on its own for days.
+**An AI dev team that runs for days, entirely in GitHub Copilot.** Give it a goal, approve one plan, and a Copilot Orchestrator agent files the GitHub issues, has a Builder implement them, has a Diff Reviewer on a different model family check every change, gates each batch with your own test suite, and opens pull requests. It keeps going across VS Code restarts and through its own log trims.
 
-copilot-forever does two jobs:
+By **Sean Galliher**. MIT licensed.
+
+> **Headline demo: [Pocket Board](demo/README.md).** A small browser task board built from an empty repository in a few hours of loop time, with two human messages: `start` and `APPROVE PLAN`. The [video outline](demo/VIDEO-OUTLINE.md) walks through the whole solution.
+
+There are two layers. Use the first on its own, or both together:
+
+| Layer | What it does | Where |
+|---|---|---|
+| **Keep-alive kit** | Keeps **one** long-lived Copilot agent session running for days: a standalone VS Code agent host that survives editor restarts, and automatic `events.jsonl` trims at safe points the agent chooses, followed by an automatic continue. | this README, `bin/`, `src/` |
+| **Goal loop** | Four Copilot custom agents (Orchestrator, Architect, Builder, Diff Reviewer), shared standing orders, a receipted test gate and a handoff file, with safe defaults: plan approval, caps, a STOP file, PRs only. | [templates/goal-loop](templates/goal-loop/README.md) |
+
+On a new machine, one command clones the kit, installs it, and renders the goal loop into your repository:
+
+```bash
+git clone https://github.com/seangalliher/copilot-forever.git && node copilot-forever/bootstrap.mjs --repo path/to/your-repo
+```
+
+The rest of this README covers the keep-alive kit. The goal loop is documented in [templates/goal-loop/README.md](templates/goal-loop/README.md).
+
+## The keep-alive kit
+
+It does two jobs:
 
 1. **Keeps the session alive when VS Code quits.** It runs the session on a *standalone* VS Code agent host bound to localhost, which the OS starts at logon. VS Code attaches to that host instead of owning it.
 2. **Keeps the session's event log small enough to resume.** At a safe point the agent chooses itself, a watcher stops the host, trims `events.jsonl` to the latest successful compaction (archiving the full log first), restarts the host, and tells the agent to continue over the open [Agent Host Protocol](https://github.com/microsoft/agent-host-protocol).
 
-> **Status: reference implementation in validation.** The machine-specific scripts this kit was ported from (Windows, PowerShell and Python) run a real orchestrator today. Every part of them has been exercised except one: a full automatic trim cycle (stop, trim, restart, then continue to a just-reloaded session) has not yet completed on the real session. This Node port passes its own tests on Windows, including that full cycle against a fake host. Its first real trim is the first end-to-end proof. If that continue fails, the notification asks you to send "continue" by hand, and the session is intact either way.
+> **Status: reference implementation in validation.** The machine-specific scripts this kit was ported from (Windows, PowerShell and Python) run a real orchestrator today. Every part of them has been exercised except one: a full automatic trim cycle (stop, trim, restart, then continue to a just-reloaded session) has not yet completed on the real session. This Node port passes its own tests on Windows, including that full cycle against a fake host. Its first real trim is the first end-to-end proof. If that continue fails, the notification asks you to send "continue" by hand, and the session is intact either way. The goal loop's agents have not yet completed a full run; the demo run is their first.
 
 ## The problem
 
@@ -163,7 +184,7 @@ Every command accepts `--config <file>` and `--dry-run`. With `--dry-run`, every
 | `install` / `uninstall [--stop-host]` | Manages the OS schedule. |
 | `snippet` | Prints the agent-side instructions with your paths filled in. |
 
-Logs: `~/.copilot-forever/logs/copilot-forever.log` (the kit) and `host.log` (the host's own output, with the token masked).
+Logs: `~/.copilot-forever/logs/copilot-forever.log` (the kit) and `host-<instanceName>.log` (the host's own output, with the token masked).
 
 ## Configuration
 
@@ -210,6 +231,13 @@ Logs: `~/.copilot-forever/logs/copilot-forever.log` (the kit) and `host.log` (th
 - **Windows:** Task Scheduler starts node through `powershell.exe -WindowStyle Hidden`; a console window can flash for a moment.
 - **Linux/macOS:** desktop notifications need `notify-send` or `osascript` and a desktop session. Otherwise they appear only in the log.
 
+The goal loop adds its own:
+
+- **Agents follow instructions; they are not enforced by code.** Caps, the STOP file, plan approval and the merge policy are rules in the agent files. The gate script, the reviewer-family check in bootstrap, branch protection on GitHub and the PR-only workflow are the hard guards. Turn on branch protection for the default branch (require a PR and passing checks) so a misbehaving agent cannot push to it.
+- **Model ids change.** The default models in the config are the ones tested at the time of writing. Check that your Copilot plan offers them, and pick a reviewer from a different vendor than the builder.
+- **Not yet proven end to end.** The goal-loop templates are distilled from a loop that ran for months, but this generic version has not yet completed a full run. The demo run is its first; expect to tune the agent files after it.
+- **Cost.** A loop that runs for hours uses premium requests continuously. Watch your Copilot usage on the first runs, and keep `caps.maxBatchesPerRun` low until you know your rate.
+
 ## Compared with Ralph loops
 
 Ralph loops (and the swarm orchestrators built on the same idea) run a fresh, non-interactive `copilot -p "<prompt>"` per iteration. State lives in files, every iteration starts with a clean context, and nothing is long-lived, so there is no log to grow and nothing to keep alive. That makes them simple, robust and easy to sandbox.
@@ -221,9 +249,9 @@ Use a Ralph loop when each unit of work can start cold from files. Use copilot-f
 ## Security notes
 
 - **Archived logs hold full transcripts.** Everything in `~/.copilot/session-archive/` is a complete copy of the session: prompts, tool calls, file contents, command output, and possibly secrets that appeared in any of them. Delete old archives when you no longer need them. On macOS and Linux each session's archive folder is mode `700` and each archive `600`; on Windows they inherit your profile folder's permissions.
-- **The token file grants full control of the host.** Anyone with the token can drive your agent on localhost. It is created with mode `600` on macOS and Linux, and with an ACL for your user only on Windows. It is never logged: the host's startup banner is masked in `host.log`, and every log line passes through redaction.
+- **The token file grants full control of the host.** Anyone with the token can drive your agent on localhost. It is created with mode `600` on macOS and Linux, and with an ACL for your user only on Windows. It is never logged: the host's startup banner is masked in its host log, and every log line passes through redaction.
 - **Localhost only.** The host is always started with `--host localhost` and a connection token. The kit never passes `0.0.0.0` or `--without-connection-token`.
-- **Clean environment.** The host, and every shell the agent opens, starts with an allowlist of OS variables (PATH, HOME/USERPROFILE, temp, locale and the like) plus any names in `host.passEnv`. Variables of whatever ran the command (for example another agent's `CLAUDECODE`, VS Code's `VSCODE_*`, `ELECTRON_RUN_AS_NODE`, `NODE_OPTIONS`, tokens in your shell) do not leak into the long-lived agent. Run `install` and `host start` from an ordinary terminal.
+- **Clean environment.** The host, and every shell the agent opens, starts with an allowlist of OS variables (PATH, HOME/USERPROFILE, temp, locale and the like) plus any names in `host.passEnv`. Variables of whatever ran the command (for example VS Code's `VSCODE_*`, `ELECTRON_RUN_AS_NODE`, `NODE_OPTIONS`, other tools' session variables, tokens in your shell) do not leak into the long-lived agent. Run `install` and `host start` from an ordinary terminal.
 - **Sandbox if you auto-approve tools.** An agent that runs unattended for days with auto-approved tools can do anything your user account can. Prefer a dedicated user account, VM, container or dev box, keep credentials it does not need out of reach, and review what it pushes.
 
 ## Tested versions
@@ -248,6 +276,8 @@ npm test        # unit tests + end-to-end against a fake host
 ```
 
 The tests use small synthetic `events.jsonl` fixtures ([test/fixtures](test/fixtures), regenerated by `make-fixtures.mjs`), a fake AHP WebSocket server ([test/fake-ahp-server.mjs](test/fake-ahp-server.mjs)), and a fake `code` CLI ([test/fake-code.mjs](test/fake-code.mjs)). The fake CLI runs a fake host process tree, so the end-to-end test covers the full cycle: host start, dry run, status, refusal, stop, trim, restart and continue.
+
+The goal-loop tests ([test/goal-loop.test.mjs](test/goal-loop.test.mjs)) run the gate script in temporary Git repositories (pass, fail, dirty tree, tests that change tracked files, `--verify` after a new commit), render every template, run the bootstrap dry and for real, and check that no project-specific vocabulary appears in the kit, the templates or the demo.
 
 ## License
 

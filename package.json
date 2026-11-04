@@ -1,7 +1,7 @@
 {
   "name": "copilot-forever",
   "version": "0.1.0",
-  "description": "Keep one long-lived GitHub Copilot agent session running for days: a standalone VS Code agent host that survives editor restarts, plus automatic event-log trims at agent-chosen safe points.",
+  "description": "An AI dev team that runs for days entirely in GitHub Copilot: a keep-alive kit for one long-lived agent session (standalone VS Code agent host, automatic log trims) plus a goal loop of Orchestrator, Architect, Builder and Diff Reviewer agents.",
   "license": "MIT",
   "author": "Sean Galliher",
   "repository": {
@@ -17,6 +17,9 @@
     "bin",
     "src",
     "agent",
+    "templates",
+    "demo",
+    "bootstrap.mjs",
     "copilot-forever.config.example.json",
     "README.md",
     "LICENSE",
@@ -35,7 +38,10 @@
     "copilot-cli",
     "vscode",
     "agent-host-protocol",
-    "long-running-agent"
+    "long-running-agent",
+    "agentic-loop",
+    "custom-agents",
+    "autonomous-agents"
   ],
   "dependencies": {
     "@microsoft/agent-host-protocol": "1.0.0"

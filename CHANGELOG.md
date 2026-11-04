@@ -4,6 +4,16 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added
+
+- **Goal loop** (`templates/goal-loop/`): Orchestrator, Architect, Builder and Diff Reviewer custom agents for GitHub Copilot; shared standing orders; a receipted gate script (`gate.mjs`); a handoff template; and a config for models, gate command, caps, merge policy and labels. Safe defaults: one human plan approval (`APPROVE PLAN`), caps, a STOP file, PRs only with no auto-merge, and a reviewer on a different model family (bootstrap refuses the same family).
+- `bootstrap.mjs` and `copilot-forever goal-loop`: one-command setup on a new machine. Checks prerequisites, installs the kit, renders the templates into a repository without overwriting its own files, writes its keep-alive config, and prints the manual steps. `--dry-run` writes nothing.
+- Demo (`demo/`): the Pocket Board goal, exact reproduction steps, a demo config, and a segment-by-segment video outline.
+
+### Fixed
+
+- The watcher lock and the host log are now per instance (`watch-<instanceName>.lock`, `host-<instanceName>.log`), so two instances sharing a state folder no longer block each other.
+
 ## [0.1.0] - 2026-11-04
 
 First public version: a generic, cross-platform port of a working Windows setup (PowerShell and Python scripts) that keeps one orchestrator session alive. Reference implementation in validation: a full automatic trim cycle has not yet completed on a real session.

@@ -31,6 +31,8 @@ Commands
   install / uninstall         Schedule the host and watcher (Task Scheduler / launchd / systemd)
        [--stop-host]          uninstall: also stop the running host
   snippet                     Print the agent-side instructions with your configured paths
+  goal-loop --repo <folder>   Render the goal-loop agents, gate and handoff into a repository
+       [--goal-config <file>] [--no-install] (same as bootstrap.mjs)
 
 Options
   --config <file>   Config file (default: $COPILOT_FOREVER_CONFIG, ./${CONFIG_NAME}, ~/.copilot-forever/config.json)
@@ -53,6 +55,10 @@ const { values: o, positionals } = parseArgs({
     probe: { type: 'boolean', default: false },
     'stop-host': { type: 'boolean', default: false },
     timeout: { type: 'string' },
+    'goal-config': { type: 'string' },
+    'no-install': { type: 'boolean', default: false },
+    'no-link': { type: 'boolean', default: false },
+    'allow-same-family': { type: 'boolean', default: false },
     help: { type: 'boolean', short: 'h', default: false },
   },
 });
@@ -67,6 +73,13 @@ async function main() {
     return 0;
   }
   if (cmd === 'init') return init();
+  if (cmd === 'goal-loop') {
+    if (!o.repo) throw new Refusal('usage: copilot-forever goal-loop --repo <folder> [--goal-config <file>] [--dry-run] [--force] [--no-install]', 2);
+    const { bootstrap } = await import('../src/goal-loop.mjs');
+    await bootstrap({ repo: o.repo, config: o['goal-config'], dryRun, force: o.force, install: !o['no-install'], link: !o['no-link'],
+      allowSameFamily: o['allow-same-family'], log: new Logger({ dryRun, prefix: 'goal-loop: ' }) });
+    return 0;
+  }
 
   const cfg = loadConfig(o.config);
   const log = new Logger({ file: dryRun ? undefined : cfg.logFile, dryRun, prefix: cmd === 'watch' ? '' : `${cmd}: ` });

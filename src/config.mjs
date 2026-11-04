@@ -148,8 +148,8 @@ export function resolveConfig(raw, baseDir, file = null) {
   cfg.host.codeCommand = cfg.host.codeCommand.map((x, i) => (i === 0 ? expandHome(x) : x));
   cfg.sessionStateDir = path.join(cfg.copilotHome, 'session-state');
   cfg.logFile = path.join(cfg.stateDir, 'logs', 'copilot-forever.log');
-  cfg.hostLogFile = path.join(cfg.stateDir, 'logs', 'host.log');
-  cfg.lockFile = path.join(cfg.stateDir, 'watch.lock');
+  cfg.hostLogFile = path.join(cfg.stateDir, 'logs', `host-${cfg.instanceName}.log`);
+  cfg.lockFile = path.join(cfg.stateDir, `watch-${cfg.instanceName}.lock`);
   cfg.installMarker = path.join(cfg.stateDir, `installed-${cfg.instanceName}.json`);
   return cfg;
 }

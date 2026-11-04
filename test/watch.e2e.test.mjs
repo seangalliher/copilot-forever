@@ -66,7 +66,7 @@ test('host start: spawns the host with a clean environment and an owner-only tok
   const envKeys = JSON.parse(fs.readFileSync(path.join(root, `host-env-${s.hostPid}.json`), 'utf8'));
   assert.ok(!envKeys.includes('CF_TEST_LEAK'), 'caller variables do not reach the host');
   assert.ok(!envKeys.includes('CLAUDECODE'));
-  const hostLog = fs.readFileSync(path.join(root, 'state', 'logs', 'host.log'), 'utf8');
+  const hostLog = fs.readFileSync(path.join(root, 'state', 'logs', 'host-copilot-forever.log'), 'utf8');
   assert.match(hostLog, /tkn=\*+/);
   assert.ok(!hostLog.includes(token), 'token masked in host.log');
   assert.ok(!r.out.includes(token));

@@ -112,8 +112,8 @@ test('host: the banner token is masked in place with same-length text', () => {
 // ---- util -----------------------------------------------------------------------------------
 test('util: VS Code style file URIs round-trip', () => {
   if (win) {
-    assert.equal(vscodeFileUri('D:\\ProbOS\\.github\\agents\\o.agent.md'), 'file:///d%3A/ProbOS/.github/agents/o.agent.md');
-    assert.equal(uriToPath('file:///d%3A/ProbOS'), 'd:\\ProbOS');
+    assert.equal(vscodeFileUri('D:\\MyRepo\\.github\\agents\\o.agent.md'), 'file:///d%3A/MyRepo/.github/agents/o.agent.md');
+    assert.equal(uriToPath('file:///d%3A/MyRepo'), 'd:\\MyRepo');
   } else {
     assert.equal(vscodeFileUri('/home/u/my repo/a.md'), 'file:///home/u/my%20repo/a.md');
     assert.equal(uriToPath('file:///home/u/my%20repo'), '/home/u/my repo');
