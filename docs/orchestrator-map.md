@@ -5,36 +5,32 @@ How the goal loop works, from one goal to merged pull requests: who does what, i
 ## The whole loop on one screen
 
 ```mermaid
-flowchart TD
+flowchart LR
   subgraph P1["Phase 1: goal to approved plan"]
-    G["GOAL.md<br/>(written, or pasted into the chat)"] --> AI["Architect: intake<br/>writes PLAN.md, files nothing"]
-    AI --> SH["Orchestrator shows the plan"]
-    SH --> HA{"Human replies<br/>APPROVE PLAN?"}
-    HA -->|asks for changes| AI
-    HA -->|yes| AF["Architect: file-issues<br/>at most maxIssuesPerPlan, labelled"]
+    direction TB
+    G["GOAL.md"] --> AI["Architect: intake<br/>writes PLAN.md"]
+    AI --> HA{"Human:<br/>APPROVE PLAN?"}
+    HA -->|changes| AI
+    HA -->|yes| AF["Architect: file-issues<br/>(capped, labelled)"]
+    AF --> Q[("GitHub issue queue")]
   end
 
-  AF --> Q[("GitHub issue queue<br/>label: goal-loop")]
-
-  subgraph P2["Phase 2: work the queue, one batch at a time"]
-    Q --> CK{"STOP file?<br/>cap reached?"}
-    CK -->|yes| HO["write handoff, stop"]
-    CK -->|no| PB["pick the next batch:<br/>first unblocked issue<br/>+ up to 2 tightly coupled"]
-    PB --> IS["per issue: build, review rounds, commit<br/>(see the batch in detail)"]
-    IS --> GT["gate.mjs once per batch<br/>full tests, receipt bound to the commit"]
+  subgraph P2["Phase 2: one batch at a time"]
+    direction TB
+    CK{"STOP file?<br/>cap reached?"} -->|no| PB["pick batch: first unblocked<br/>issue + up to 2 coupled"]
+    CK -->|yes| HO["handoff, stop"]
+    PB --> IS["per issue: Builder,<br/>review rounds, commit"]
+    IS -.->|"round cap reached"| PK["park: needs-human"]
+    IS --> GT{"gate.mjs:<br/>full tests"}
     GT -->|red| IS
-    GT -->|green| VR["gate.mjs --verify, push the branch,<br/>one PR (Closes #N), never auto-merge"]
-    VR --> MP{"merge policy"}
-    MP -->|human| HM["human merges"]
-    MP -->|agent-after-green| AM["Orchestrator merges<br/>after green CI + matching receipt"]
-    HM --> VC["verify every issue closed"]
-    AM --> VC
-    VC --> AD["handoff addendum"]
-    AD --> CK
+    GT -->|green| PR["verify, push,<br/>one PR per batch"]
+    PR --> MG["merge: human, or agent<br/>after green CI"]
+    MG --> VC["verify issues closed,<br/>handoff addendum"]
+    VC --> CK
+    VC -.->|"queue empty"| DN["final addendum, stop"]
   end
 
-  IS -.->|"review round cap reached"| PK["park: needs-human label,<br/>comment, continue elsewhere"]
-  AD -.->|"no unparked issue left"| DN["final addendum, stop"]
+  P1 ==> P2
 ```
 
 ## One batch in detail
