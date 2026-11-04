@@ -219,6 +219,10 @@ export async function stopHost(cfg, hostPid, log, { runtimePid = undefined, dryR
       await killTree(runtimePid);
     }
   }
+  // The killed host's listening socket can outlive it briefly (seen on Windows). Starting again
+  // before it closes would find the port "already listening" and skip the start.
+  const closed = await waitFor(async () => !(await isListening(cfg.host.port)), 30000, 500);
+  if (!closed) log.warn(`port ${cfg.host.port} still listening 30 s after host ${hostPid} stopped`);
   return !pidAlive(hostPid);
 }
 
