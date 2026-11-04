@@ -6,7 +6,7 @@ import net from 'node:net';
 import path from 'node:path';
 import { after, before, test } from 'node:test';
 import { resolveConfig, validate, DEFAULTS } from '../src/config.mjs';
-import { apiTarget, classifyError, maybeResume, probe, resumeCandidate, resumeText, tailEvents } from '../src/resume.mjs';
+import { apiTarget, classifyError, maybeResume, maybeStallResume, probe, resumeCandidate, resumeText, stallCandidate, stallText, tailEvents } from '../src/resume.mjs';
 import { logger, rm, SID, tmpDir } from './helpers.mjs';
 
 const DNS = 'Execution failed: Failed to get response from the AI model; retried 5 times. Last error: error sending request for url (https://api.example-copilot.test/v1/messages): client error (Connect): dns error: No such host is known. (os error 11001) [ENOTFOUND]';
@@ -175,4 +175,87 @@ test('tailEvents drops a cut first line', () => {
 test('probe reports a closed port', async () => {
   assert.equal(await probe('127.0.0.1', apiPort, 2000), null);
   assert.match(await probe('127.0.0.1', closedPort, 2000), /not reachable|did not answer/);
+});
+
+// ---- stall resume -------------------------------------------------------------------------------
+const S0 = Date.parse('2026-11-04T17:21:14.000Z');
+const sev = (type, i, data = {}) => ({ type, data, id: `s${i}`, timestamp: new Date(S0 - 10000 + i * 1000).toISOString() });
+const call = (i, toolName, args) => sev('tool.execution_start', i, { toolName, arguments: args });
+/** A working turn with the given calls, then a closing message-only turn (the observed shape). */
+const stalled = (...calls) => [
+  sev('user.message', 0), sev('assistant.turn_start', 1), ...calls, sev('assistant.turn_end', 7),
+  sev('assistant.turn_start', 8), sev('assistant.message', 9), sev('assistant.turn_end', 10),
+];
+const consult = (i = 2) => call(i, 'powershell', { command: 'python scripts/consult.py', mode: 'async', shellId: 'arch-r1', description: 'Architect consult' });
+const watchdog = (s, i = 3) => call(i, 'powershell', { command: `Start-Sleep -Seconds ${s}`, mode: 'async', shellId: 'wd', description: `Watchdog ${s} s` });
+
+test('stallCandidate: resumes a turn that ended waiting on background work, once quiet long enough', () => {
+  const ev1 = stalled(consult(), watchdog(270));
+  const c = stallCandidate(ev1, { now: S0 + 21 * 60000 });
+  assert.equal(c.reason, null);
+  assert.deepEqual(c.work, ['Architect consult', 'Watchdog 270 s']);
+  assert.equal(c.quietMinutes, 20);
+  assert.match(stallCandidate(ev1, { now: S0 + 9 * 60000 }).reason, /quiet for only 9 of 20 min/);
+  const long = stalled(watchdog(1800));
+  assert.equal(stallCandidate(long, { now: S0 + 30 * 60000 }).quietMinutes, 35, 'a long watchdog extends the wait');
+  assert.match(stallCandidate(long, { now: S0 + 30 * 60000 }).reason, /of 35 min/);
+  assert.equal(stallCandidate(long, { now: S0 + 36 * 60000 }).reason, null);
+  const bgTask = stalled(call(2, 'task', { mode: 'background', description: 'Builder slice 2' }));
+  assert.deepEqual(stallCandidate(bgTask, { now: S0 + 21 * 60000 }).work, ['Builder slice 2']);
+});
+
+test('stallCandidate: never after a deliberate stop, an error, sync-only work, or while a turn runs', () => {
+  const now = S0 + 60 * 60000;
+  assert.match(stallCandidate(stalled(call(2, 'powershell', { command: 'git status', mode: 'sync' })), { now }).reason, /no background work/);
+  assert.match(stallCandidate(stalled(consult(), call(3, 'task_complete', {})), { now }).reason, /deliberately/);
+  assert.match(stallCandidate(stalled(consult(), call(3, 'ask_user', { question: 'Which?' })), { now }).reason, /deliberately/);
+  assert.match(stallCandidate([...stalled(consult()), sev('session.error', 11, { message: 'ENOTFOUND' })], { now }).reason, /network resume decides/);
+  assert.match(stallCandidate([...stalled(consult()), sev('assistant.turn_start', 11)], { now }).reason, /has not ended/);
+  assert.equal(stallCandidate([], { now }).key, null);
+});
+
+test('stallText fills {time} and {work}', () => {
+  const cfg = resolveConfig({ repoFolder: '/r' }, '/cfg');
+  const c = stallCandidate(stalled(consult(), watchdog(270)), { now: S0 + 21 * 60000 });
+  assert.match(stallText(cfg, c), /^Continue\. You ended your turn at 2026-11-04 17:21Z waiting on background work \(Architect consult; Watchdog 270 s\)/);
+});
+
+test('config: stall settings are validated', () => {
+  const bad = { ...structuredClone(DEFAULTS), repoFolder: '/r', stall: { ...DEFAULTS.stall, maxTries: 0, enabled: 1, text: '' } };
+  const p = validate(bad);
+  for (const k of ['maxTries', 'enabled', 'text']) assert.ok(p.some((x) => x.includes(`stall.${k}`)), k);
+});
+
+test('maybeStallResume: sends one continue per try, gives up after maxTries, and caps the day', async () => {
+  const x = setup('stall', stalled(consult(), watchdog(270)));
+  const log = logger();
+  const now = S0 + 25 * 60000;
+  assert.equal((await maybeStallResume(x.cfg, log, { ...x.o, now, dryRun: true })).state, 'would-resume');
+  assert.equal(x.sent.length, 0, 'dry run sends nothing');
+  assert.ok(!fs.existsSync(x.cfg.stallStateFile), 'dry run writes no state');
+  assert.equal((await maybeStallResume(x.cfg, log, { ...x.o, now })).state, 'resumed');
+  assert.match(x.sent[0], /waiting on background work \(Architect consult; Watchdog 270 s\)/);
+  assert.equal((await maybeStallResume(x.cfg, log, { ...x.o, now: now + 20 * 60000 })).state, 'resumed', 'the log did not change: same stall, try 2');
+  assert.equal((await maybeStallResume(x.cfg, log, { ...x.o, now: now + 40 * 60000 })).state, 'gave-up');
+  assert.deepEqual(x.notes, ['Agent idle: resume needed']);
+  assert.equal((await maybeStallResume(x.cfg, log, { ...x.o, now: now + 60 * 60000 })).state, 'gave-up');
+  assert.equal(x.notes.length, 1, 'the give-up notification is shown once');
+
+  const busy = setup('stall-busy', stalled(consult()));
+  busy.o.hostInfo = { sessions: [{ workingDirectories: [busy.cfg.repoFolder], resource: 'ahp-session:/x' }] };
+  assert.equal((await maybeStallResume(busy.cfg, logger(), { ...busy.o, now })).state, 'wait');
+  assert.equal(busy.sent.length, 0);
+
+  const daily = setup('stall-daily', stalled(consult()), { maxTries: 5 });
+  daily.cfg.stall.maxPerDay = 1;
+  assert.equal((await maybeStallResume(daily.cfg, logger(), { ...daily.o, now })).state, 'resumed');
+  // A new stall (the log changed) still hits the daily cap.
+  fs.writeFileSync(daily.file, [...stalled(consult()), sev('assistant.turn_start', 20), call(21, 'powershell', { command: 'x', mode: 'async', shellId: 'n' }), sev('assistant.turn_end', 22)].map((e) => JSON.stringify(e)).join('\n') + '\n');
+  fs.utimesSync(daily.file, S0 / 1000, S0 / 1000);
+  assert.equal((await maybeStallResume(daily.cfg, logger(), { ...daily.o, now })).state, 'gave-up');
+  assert.equal(daily.sent.length, 1);
+
+  const off = setup('stall-off', stalled(consult()));
+  off.cfg.stall.enabled = false;
+  assert.equal((await maybeStallResume(off.cfg, logger(), { ...off.o, now })).state, 'off');
 });

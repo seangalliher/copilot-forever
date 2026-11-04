@@ -69,6 +69,18 @@ export const DEFAULTS = Object.freeze({
       'Continue. Your last turn failed on a network error at {time} and the connection is back. ' +
       'Check where you were (git state, running work, the latest addendum in {handoff}) before resuming.',
   },
+  // Stall resume: continue the agent when its last turn launched background work and ended to
+  // wait for it, but no completion notification ever woke it. See src/resume.mjs.
+  stall: {
+    enabled: true,
+    quietMinutes: 20, // or the longest Start-Sleep in that turn plus 5 minutes, if longer
+    maxTries: 2, // continues per stall
+    maxPerDay: 24, // continues across all stalls in 24 hours
+    text:
+      'Continue. You ended your turn at {time} waiting on background work ({work}), and nothing woke you: ' +
+      'the completion notification was not delivered. Check the output of that work now. For anything still running, ' +
+      'wait in the foreground (a sync wait or a read with a timeout) instead of ending the turn.',
+  },
   notify: true,
   // Refuse to trim when `copilot --version` reports a major version other than these.
   copilot: {
@@ -136,6 +148,10 @@ export function validate(cfg) {
   if (!Number.isInteger(r.apiPort) || r.apiPort < 1 || r.apiPort > 65535) p.push('resume.apiPort must be an integer 1-65535');
   if (r.apiHost !== null && (typeof r.apiHost !== 'string' || !r.apiHost)) p.push('resume.apiHost must be a host name or null');
   if (typeof r.text !== 'string' || !r.text.trim()) p.push('resume.text must be non-empty');
+  const s = cfg.stall;
+  if (typeof s.enabled !== 'boolean') p.push('stall.enabled must be true or false');
+  for (const k of ['quietMinutes', 'maxTries', 'maxPerDay']) if (!isPosInt(s[k]) || s[k] < 1) p.push(`stall.${k} must be a positive integer`);
+  if (typeof s.text !== 'string' || !s.text.trim()) p.push('stall.text must be non-empty');
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(cfg.instanceName)) p.push('instanceName may use letters, digits, . _ - (max 64)');
   return p;
 }
@@ -175,6 +191,7 @@ export function resolveConfig(raw, baseDir, file = null) {
   cfg.hostLogFile = path.join(cfg.stateDir, 'logs', `host-${cfg.instanceName}.log`);
   cfg.lockFile = path.join(cfg.stateDir, `watch-${cfg.instanceName}.lock`);
   cfg.resumeStateFile = path.join(cfg.stateDir, `resume-${cfg.instanceName}.json`);
+  cfg.stallStateFile = path.join(cfg.stateDir, `stall-${cfg.instanceName}.json`);
   cfg.installMarker = path.join(cfg.stateDir, `installed-${cfg.instanceName}.json`);
   return cfg;
 }

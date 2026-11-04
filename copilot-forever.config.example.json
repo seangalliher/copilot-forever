@@ -44,6 +44,13 @@
     "probeTimeoutSeconds": 5,
     "text": "Continue. Your last turn failed on a network error at {time} and the connection is back. Check where you were (git state, running work, the latest addendum in {handoff}) before resuming."
   },
+  "stall": {
+    "enabled": true,
+    "quietMinutes": 20,
+    "maxTries": 2,
+    "maxPerDay": 24,
+    "text": "Continue. You ended your turn at {time} waiting on background work ({work}), and nothing woke you: the completion notification was not delivered. Check the output of that work now. For anything still running, wait in the foreground (a sync wait or a read with a timeout) instead of ending the turn."
+  },
   "notify": true,
   "copilot": {
     "supportedMajors": [1],

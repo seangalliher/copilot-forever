@@ -3,7 +3,8 @@
 // Every run:  finds the long-lived session on the standalone host and writes the status file
 //             (session id, AHP session URI, log size, trim_due).
 // Resume run: when no trim is requested and the last turn died on a network error, sends a
-//             continue once the model API answers again (src/resume.mjs).
+//             continue once the model API answers again; and when the last turn ended waiting on
+//             background work whose completion never woke it (src/resume.mjs, stall resume).
 // Trim run:   only when the agent has written the request file at a safe point and stopped.
 //             If the session is idle on two checks apart, it stops the host, trims the log
 //             (archiving the full log first), restarts the host, sends the continue message over
@@ -15,7 +16,7 @@ import { continueSession, connect, findSessionUri } from './ahp.mjs';
 import { continueMessage } from './config.mjs';
 import { agentPs, activeRepoSessions, findStandaloneHost, readToken, startHost, stopHost } from './host.mjs';
 import { notify } from './notify.mjs';
-import { maybeResume } from './resume.mjs';
+import { maybeResume, maybeStallResume } from './resume.mjs';
 import { isListening, pidAlive, processTable } from './proc.mjs';
 import { checkSchema, readEvents } from './schema.mjs';
 import { checkVersions, findSession, notIdleReason, readFirstEvent } from './session.mjs';
@@ -130,12 +131,15 @@ async function watchInner(cfg, log, { dryRun, force }) {
   if (dryRun) log.info(`status would be: ${JSON.stringify(st)}`);
   else writeJsonAtomic(cfg.files.status, st);
   if (!request) {
-    const resume = await maybeResume(cfg, log, {
+    const io = {
       hostInfo, session, ahpSession, dryRun,
       send: (text) => sendContinue(cfg, log, ahpSession, text),
       notify: (title, body) => notify(cfg, log, title, body),
-    });
-    return { state: 'status', status: st, resume };
+    };
+    const resume = await maybeResume(cfg, log, io);
+    // A network resume this run already sent a continue (or is waiting on one); check stalls next run.
+    const stall = ['resumed', 'resume-failed', 'would-resume'].includes(resume.state) ? { state: 'skipped' } : await maybeStallResume(cfg, log, io);
+    return { state: 'status', status: st, resume, stall };
   }
 
   // ---- trim run ------------------------------------------------------------------------------

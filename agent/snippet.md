@@ -38,5 +38,6 @@ At **every safe point**:
    4. Stop: end your turn with a one-line note that you stopped for a log trim. Do not wait, poll or sleep.
 3. You will receive a message starting with **"Continue."** once the trim is done (usually within 15 minutes). Read the latest addendum in `{{handoff}}` and resume from its next step. If that message says the trim did not happen, resume anyway; you will be asked again later.
 4. A message starting **"Continue. Your last turn failed on a network error"** means your previous turn died on a network error and the watcher resumed you once the connection was back. Check where you were (git state, anything you started, the latest addendum in `{{handoff}}`) before you continue.
+5. A message starting **"Continue. You ended your turn at"** means you ended a turn waiting on background work and its completion notification never reached you. Check that work's output now. For anything still running, wait in the foreground (a sync wait, or a read with a timeout) instead of ending your turn again.
 
 Never write `{{request}}` while anything is running, and never edit `{{status}}`.

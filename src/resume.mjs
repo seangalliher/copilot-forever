@@ -151,3 +151,98 @@ export async function maybeResume(cfg, log, { hostInfo, session, ahpSession, dry
   if (res.ok) await notify('Agent resumed after a network error', `It stopped at ${errorTime(c.error)}. No action needed.`);
   return { state: res.ok ? 'resumed' : 'resume-failed', tries: st.tries };
 }
+
+// ---- stall resume ---------------------------------------------------------------------------
+// The agent launches background work (a shell with mode "async", a task with mode "background"),
+// ends its turn to wait, and is normally woken by a system notification when that work finishes.
+// If the notification is never delivered (seen on a standalone host after a network error: no
+// notification arrived for the rest of the session), the session sits idle indefinitely. When the
+// last working turn launched background work and the log has been quiet for `stall.quietMinutes`
+// (or the longest Start-Sleep in that turn plus 5 minutes, if longer), the watcher sends a continue
+// naming that work. Never after task_complete or ask_user (a deliberate stop) or when the log ends
+// in an error (network resume decides). At most `stall.maxTries` per stall, `stall.maxPerDay` in all.
+
+const STOP_TOOLS = new Set(['task_complete', 'ask_user']);
+const BACKGROUND_MODES = new Set(['async', 'background']);
+
+/**
+ * Whether the log alone warrants a stall resume.
+ * @returns {{ key: string | null, reason: string | null, work?: string[], quietMinutes?: number, since?: string, quiet?: boolean }}
+ */
+export function stallCandidate(events, { now = Date.now(), quietMinutes = 20 } = {}) {
+  const last = events.at(-1);
+  if (!last) return { key: null, reason: 'empty log', quiet: true };
+  const key = last.id ?? last.timestamp;
+  const lastIdx = (type, before = events.length - 1) => { for (let i = before; i >= 0; i--) if (events[i].type === type) return i; return -1; };
+  const end = lastIdx('assistant.turn_end');
+  const start = lastIdx('assistant.turn_start');
+  if (end < 0 || start > end) return { key, reason: 'the last turn has not ended', quiet: true };
+  if (lastIdx('session.error') > start) return { key, reason: 'the last turn ended in an error (network resume decides)', quiet: true };
+  const tool = lastIdx('tool.execution_start');
+  if (tool < 0) return { key, reason: 'no tool calls in the log tail', quiet: true };
+  const from = lastIdx('assistant.turn_start', tool);
+  const to = events.findIndex((e, i) => i > tool && e.type === 'assistant.turn_end');
+  if (from < 0 || to < 0) return { key, reason: 'could not bound the last working turn', quiet: true };
+  const calls = events.slice(from, to + 1).filter((e) => e.type === 'tool.execution_start');
+  if (calls.some((e) => STOP_TOOLS.has(e.data?.toolName))) return { key, reason: 'the last working turn stopped deliberately (task_complete or ask_user)', quiet: true };
+  const bg = calls.filter((e) => BACKGROUND_MODES.has(e.data?.arguments?.mode));
+  if (!bg.length) return { key, reason: 'the last working turn launched no background work', quiet: true };
+  const work = bg.map((e) => e.data.arguments.description || e.data.arguments.shellId || e.data.toolName);
+  const sleepS = Math.max(0, ...bg.map((e) => Number(/Start-Sleep\s+(?:-Seconds\s+)?(\d+)|\bsleep\s+(\d+)/i.exec(String(e.data.arguments.command ?? ''))?.slice(1).find(Boolean) ?? 0)));
+  const need = Math.max(quietMinutes, Math.ceil(sleepS / 60) + 5);
+  const since = events[to].timestamp;
+  const age = (now - Date.parse(last.timestamp)) / 60000;
+  const r = { key, work, quietMinutes: need, since };
+  if (!(age >= need)) return { ...r, reason: `quiet for only ${Math.max(0, Math.floor(age))} of ${need} min`, quiet: true };
+  return { ...r, reason: null };
+}
+
+export function stallText(cfg, c) {
+  const at = new Date(c.since).toISOString().slice(0, 16).replace('T', ' ') + 'Z';
+  return cfg.stall.text.replaceAll('{time}', at).replaceAll('{work}', c.work.slice(0, 4).join('; '));
+}
+
+/**
+ * One stall check, run by the watcher when no trim is requested (after the network check).
+ * Same options as maybeResume.
+ * @returns {Promise<{ state: string, [k: string]: any }>}
+ */
+export async function maybeStallResume(cfg, log, { hostInfo, session, ahpSession, dryRun = false, now = Date.now(), send, notify }) {
+  const s = cfg.stall;
+  if (!s.enabled) return { state: 'off' };
+  const c = stallCandidate(tailEvents(path.join(session.dir, 'events.jsonl')), { now, quietMinutes: s.quietMinutes });
+  if (c.reason) return { state: 'none', reason: c.reason };
+
+  let st = null;
+  try { st = readJson(cfg.stallStateFile); } catch { /* none yet */ }
+  const recent = (Array.isArray(st?.recent) ? st.recent : []).filter((t) => now - Date.parse(t) < 86400000);
+  if (!st || st.key !== c.key) st = { key: c.key, tries: 0, gave_up: false };
+  st.recent = recent;
+  const save = () => { if (!dryRun) writeJsonAtomic(cfg.stallStateFile, st); };
+
+  if (st.gave_up) return { state: 'gave-up' };
+  const busy = notIdleReason(cfg, hostInfo, session, now);
+  if (busy) { log.info(`stall resume: waiting (${busy})`); return { state: 'wait', reason: busy }; }
+  if (st.tries >= s.maxTries || st.recent.length >= s.maxPerDay) {
+    const why = st.tries >= s.maxTries ? `${st.tries} tries for this stall` : `${st.recent.length} stall resumes in 24 hours`;
+    log.warn(`stall resume: gave up after ${why}; a person is needed`);
+    st.gave_up = true;
+    save();
+    if (!dryRun) await notify('Agent idle: resume needed', `Automatic continue gave up after ${why}. Open the session and send: continue. See ${cfg.logFile}.`);
+    return { state: 'gave-up' };
+  }
+  if (!ahpSession) { log.warn('stall resume: no AHP session URI known; cannot send continue'); return { state: 'no-ahp' }; }
+
+  st.tries += 1;
+  st.last_try = new Date(now).toISOString();
+  st.recent.push(st.last_try);
+  const text = stallText(cfg, c);
+  if (dryRun) {
+    log.info(`stall resume: would send continue (try ${st.tries}), idle since ${c.since}, waiting on: ${c.work.join('; ')}`);
+    return { state: 'would-resume', text };
+  }
+  save();
+  const res = await send(text);
+  log.info(`stall resume try ${st.tries}: ${res.ok ? 'ok' : 'failed'}: ${res.detail}`);
+  return { state: res.ok ? 'resumed' : 'resume-failed', tries: st.tries };
+}

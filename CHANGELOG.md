@@ -15,6 +15,7 @@ All notable changes to this project are documented here. The format follows [Kee
 - README: "Persistent session or Ralph loop?" comparison.
 - [Orchestrator map](docs/orchestrator-map.md): the goal loop end to end, with diagrams of the whole loop and of one batch, the roles, every decision point, where state lives, where a person comes in, what code enforces versus what the agents' instructions do, and how the keep-alive kit fits in.
 - **Network resume**: when the session's last turn died on a network error (DNS, connection, timeout, 5xx), the watcher sends a continue once the model API answers again. Never after auth, quota, rate-limit, policy, cancel or unrecognised errors; at most `resume.maxTries` continues per error and `resume.maxPerDay` across errors, then one notification. Configured under `resume`.
+- **Stall resume**: when the agent's last working turn launched background work (an async shell or a background task) and ended to wait for it, but no completion notification ever woke it, the watcher sends a continue naming that work after `stall.quietMinutes` of quiet (or the longest `Start-Sleep` in that turn plus 5 minutes). Never after `task_complete` or `ask_user`, or when the log ends in an error; at most `stall.maxTries` per stall and `stall.maxPerDay` in all, then one notification. Seen on a real standalone host: after a network error, no completion notification arrived for the rest of the session, and the orchestrator sat idle for 5.5 hours. Configured under `stall`.
 
 ### Changed
 

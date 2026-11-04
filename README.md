@@ -27,7 +27,7 @@ It does three jobs:
 
 1. **Keeps the session alive when VS Code quits.** It runs the session on a *standalone* VS Code agent host bound to localhost, which the OS starts at logon. VS Code attaches to that host instead of owning it.
 2. **Keeps the session's event log small enough to resume.** At a safe point the agent chooses itself, a watcher stops the host, trims `events.jsonl` to the latest successful compaction (archiving the full log first), restarts the host, and tells the agent to continue over the open [Agent Host Protocol](https://github.com/microsoft/agent-host-protocol).
-3. **Resumes the session after a network drop.** When a turn dies on a network error (DNS, connection refused, a timeout, a 5xx from the model API), Copilot retries for a few seconds and then ends the turn, and the session sits idle until someone types. The watcher notices, waits until the model API answers again, and sends a continue. See [Network resume](#network-resume).
+3. **Resumes the session when it stops on its own.** When a turn dies on a network error (DNS, connection refused, a timeout, a 5xx from the model API), Copilot retries for a few seconds and then ends the turn, and the session sits idle until someone types. The watcher notices, waits until the model API answers again, and sends a continue. It also continues a session that ended its turn to wait on background work and was never woken. See [Network resume](#network-resume) and [Stall resume](#stall-resume).
 
 > **Status: reference implementation in validation.** The machine-specific scripts this kit was ported from (Windows, PowerShell and Python) run a real orchestrator today. Every part of them has been exercised except two: a full automatic trim cycle (stop, trim, restart, then continue to a just-reloaded session) has not yet completed on the real session, and network resume has been tested on a copy of a real failed log but not yet on a live network drop. This Node port passes its own tests on Windows, including that full cycle against a fake host. Its first real trim is the first end-to-end proof. If that continue fails, the notification asks you to send "continue" by hand, and the session is intact either way. The goal loop's agents have not yet completed a full run; the demo run is their first.
 
@@ -109,6 +109,18 @@ On every run with no trim request, the watcher also checks the end of the sessio
 - The model API's host (taken from the error message) resolves and accepts a connection. While it doesn't, the watcher just checks again next run.
 
 The message tells the agent when the error happened and to check where it was (git state, running work, the handoff) before resuming. Each error gets at most `resume.maxTries` continues, `resume.retryMinutes` apart, and there are at most `resume.maxPerDay` continues across all errors in 24 hours, so an API that accepts connections but fails every turn can't cause an endless loop. After that one notification asks you to step in. Set `resume.enabled` to `false` to turn it off.
+
+### Stall resume
+
+An agent that starts background work (a shell with `mode: "async"`, a task with `mode: "background"`) usually ends its turn and is woken by a system notification when that work finishes. If the notification never arrives, the session sits idle until someone types. This has been seen on a real standalone host: after a network error, no completion notification was delivered for the rest of the session, and the orchestrator waited 5.5 hours on a consult that had finished in 17 minutes.
+
+On every run with no trim request, the watcher sends a continue when all of these hold:
+
+- The last working turn (the last turn that called tools) launched background work, and the session hasn't worked since.
+- That turn didn't call `task_complete` or `ask_user` (a deliberate stop), and the log doesn't end in an error (network resume handles those).
+- The log has been quiet for `stall.quietMinutes`, or for the longest `Start-Sleep` in that turn plus 5 minutes if that is longer, and the session is idle on the host.
+
+The message says when the agent stopped and which work it was waiting on, and tells it to check that work's output and to wait in the foreground for anything still running. Each stall gets at most `stall.maxTries` continues, and there are at most `stall.maxPerDay` across all stalls in 24 hours; then one notification asks you to step in. Set `stall.enabled` to `false` to turn it off.
 
 This came from a real run: a DNS failure at 09:34 stopped an orchestrator that then sat idle for more than six hours until a person noticed.
 
@@ -227,6 +239,9 @@ Logs: `~/.copilot-forever/logs/copilot-forever.log` (the kit) and `host-<instanc
 | `resume.quietMinutes` / `retryMinutes` / `maxTries` / `maxPerDay` | `15` / `20` / `3` / `8` | How old the error must be, the gap between continues, the continues per error, and the continues across all errors in 24 hours. |
 | `resume.apiHost` / `apiPort` / `probeTimeoutSeconds` | from the error / `443` / `5` | The model API reachability check. |
 | `resume.text` | (see example) | The resume message; `{time}` is the error time and `{handoff}` the handoff path. |
+| `stall.enabled` | `true` | Stall resume on or off. |
+| `stall.quietMinutes` / `maxTries` / `maxPerDay` | `20` / `2` / `24` | The quiet time before a continue (at least the longest watchdog sleep plus 5 minutes), the continues per stall, and the continues across all stalls in 24 hours. |
+| `stall.text` | (see example) | The stall message; `{time}` is when the turn ended and `{work}` the background work it launched. |
 | `notify` | `true` | Desktop notifications (always logged as well). |
 | `copilot.supportedMajors` / `knownLogVersions` | `[1]` / `[1]` | Version and log-layout gates; see Safety. |
 
@@ -310,7 +325,7 @@ npm run build   # type-check (tsc over JSDoc)
 npm test        # unit tests + end-to-end against a fake host
 ```
 
-The tests use small synthetic `events.jsonl` fixtures ([test/fixtures](test/fixtures), regenerated by `make-fixtures.mjs`), a fake AHP WebSocket server ([test/fake-ahp-server.mjs](test/fake-ahp-server.mjs)), and a fake `code` CLI ([test/fake-code.mjs](test/fake-code.mjs)). The fake CLI runs a fake host process tree, so the end-to-end test covers the full cycle: host start, dry run, status, refusal, stop, trim, restart (after the old host's port has closed) and continue. [test/resume.test.mjs](test/resume.test.mjs) covers the network resume decisions, the retry cap and the API check.
+The tests use small synthetic `events.jsonl` fixtures ([test/fixtures](test/fixtures), regenerated by `make-fixtures.mjs`), a fake AHP WebSocket server ([test/fake-ahp-server.mjs](test/fake-ahp-server.mjs)), and a fake `code` CLI ([test/fake-code.mjs](test/fake-code.mjs)). The fake CLI runs a fake host process tree, so the end-to-end test covers the full cycle: host start, dry run, status, refusal, stop, trim, restart (after the old host's port has closed) and continue. [test/resume.test.mjs](test/resume.test.mjs) covers the network and stall resume decisions, their caps and the API check.
 
 The goal-loop tests ([test/goal-loop.test.mjs](test/goal-loop.test.mjs)) run the gate script in temporary Git repositories (pass, fail, dirty tree, tests that change tracked files, `--verify` after a new commit), render every template, run the bootstrap dry and for real, and check that no project-specific vocabulary appears in the kit, the templates or the demo.
 
