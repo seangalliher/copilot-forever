@@ -12,6 +12,7 @@
 //   --force                overwrite files bootstrap wrote before (GOAL.md is never overwritten)
 //   --no-install           skip npm ci / npm link
 //   --no-link              skip npm link only
+//   --start                also install the watcher schedule and start the standalone host (persistent mode)
 //   --allow-same-family    allow the reviewer on the builder's model family (not recommended)
 import { parseArgs } from 'node:util';
 
@@ -32,12 +33,13 @@ const { values: o } = parseArgs({
     'no-install': { type: 'boolean', default: false },
     'no-link': { type: 'boolean', default: false },
     'allow-same-family': { type: 'boolean', default: false },
+    start: { type: 'boolean', default: false },
     help: { type: 'boolean', short: 'h', default: false },
   },
 });
 
 if (o.help || !o.repo) {
-  console.log('usage: node bootstrap.mjs --repo <target repo> [--config <file>] [--dry-run] [--force] [--no-install] [--no-link]');
+  console.log('usage: node bootstrap.mjs --repo <target repo> [--config <file>] [--dry-run] [--force] [--no-install] [--no-link] [--start]');
   process.exit(o.help ? 0 : 2);
 }
 
@@ -45,7 +47,7 @@ const log = new Logger({ dryRun: o['dry-run'], prefix: 'bootstrap: ' });
 try {
   await bootstrap({
     repo: o.repo, config: o.config, dryRun: o['dry-run'], force: o.force,
-    install: !o['no-install'], link: !o['no-link'], allowSameFamily: o['allow-same-family'], log,
+    install: !o['no-install'], link: !o['no-link'], allowSameFamily: o['allow-same-family'], start: o.start, log,
   });
 } catch (e) {
   console.error(`bootstrap: ${e instanceof Refusal ? '' : 'error: '}${e.message}`);

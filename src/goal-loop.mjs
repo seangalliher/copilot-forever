@@ -53,6 +53,16 @@ export function resolveGoalLoopConfig(raw = {}, { allowSameFamily = false } = {}
   if (!MERGE_POLICIES.includes(cfg.github.mergePolicy)) p.push(`github.mergePolicy must be one of ${MERGE_POLICIES.join(', ')}`);
   if (!/^[A-Za-z0-9._/-]+\/$/.test(cfg.github.branchPrefix)) p.push('github.branchPrefix must end with / (e.g. goal-loop/)');
   for (const k of ['queue', 'inProgress', 'needsHuman']) if (!cfg.github.labels?.[k]) p.push(`github.labels.${k} is required`);
+  const r = cfg.ralph;
+  for (const k of ['copilotCommand', 'ghCommand']) {
+    if (typeof r[k] === 'string') r[k] = [r[k]];
+    if (!Array.isArray(r[k]) || !r[k].length || !r[k].every((x) => typeof x === 'string' && x)) p.push(`ralph.${k} must be a command name or an array of strings`);
+  }
+  if (typeof r.agent !== 'string' || !r.agent) p.push("ralph.agent must be the Orchestrator agent's name");
+  for (const k of ['maxIterations', 'stallLimit', 'iterationTimeoutMinutes']) if (!Number.isInteger(r[k]) || r[k] < 1) p.push(`ralph.${k} must be a positive integer`);
+  for (const k of ['pauseSeconds', 'maxAiCreditsPerRun']) if (!Number.isInteger(r[k]) || r[k] < 0) p.push(`ralph.${k} must be a non-negative integer`);
+  if (r.maxAiCreditsPerRun && r.maxAiCreditsPerRun < 30) p.push('ralph.maxAiCreditsPerRun must be 0 (no limit) or at least 30 (the Copilot CLI minimum)');
+  for (const k of ['denyTools', 'extraArgs']) if (!Array.isArray(r[k]) || !r[k].every((x) => typeof x === 'string')) p.push(`ralph.${k} must be an array of strings`);
   if (p.length) throw new Refusal(`invalid goal-loop config:\n  - ${p.join('\n  - ')}`, 2);
   return cfg;
 }
@@ -106,6 +116,8 @@ STOP
 session-log-status.json
 trim-request.json
 trim-history/
+PLAN.approved.json
+ralph/
 `;
 
 /**
@@ -187,13 +199,17 @@ export async function checkPrerequisites(log) {
   return missing;
 }
 
-export function nextSteps(repo, cfg, { linked }) {
+export function nextSteps(repo, cfg, { linked, started = false }) {
   const cf = linked ? 'copilot-forever' : `node "${path.join(KIT_ROOT, 'bin', 'copilot-forever.mjs')}"`;
   const conf = '--config .goal-loop/copilot-forever.config.json';
+  const port = cfg.keepAlive?.port ?? 47801;
+  const keepAlive = started
+    ? '    (done by --start: the watcher is scheduled and the standalone host is running)'
+    : `      ${cf} doctor ${conf}\n      ${cf} install ${conf}\n      ${cf} host start ${conf}`;
   return `
 Next steps (in ${repo}):
 
- 1. Write your goal in .goal-loop/GOAL.md.
+ 1. Write your goal in .goal-loop/GOAL.md (or paste it into the chat in step 6; the Orchestrator saves it there).
  2. Check .goal-loop/config.json: the models (the reviewer must be another model family than the
     builder), gate.command (your full test command) and the caps. After changing models, run the
     bootstrap again with --force to re-render the agents.
@@ -201,22 +217,31 @@ Next steps (in ${repo}):
       git add .github/agents .github/copilot-instructions.md .goal-loop
       git commit -m "Add goal-loop agents"
  4. Make sure the repo has a GitHub remote and you are logged in: gh auth status
+
+ Then pick a mode.
+
+ Persistent session (one live session in VS Code, kept alive by copilot-forever):
  5. Keep the session alive across VS Code restarts:
-      ${cf} doctor ${conf}
-      ${cf} install ${conf}
-      ${cf} host start ${conf}
- 6. In VS Code, add the standalone host to the chat.remoteAgentHosts user setting:
-    address localhost:${cfg.keepAlive?.port ?? 47801}, token from ~/.copilot-forever/token.txt.
- 7. In the Agents window: new session on that host, folder ${repo}, agent "Orchestrator".
+${keepAlive}
+    In VS Code, add the standalone host to the chat.remoteAgentHosts user setting:
+    address localhost:${port}, token from ~/.copilot-forever/token.txt.
+ 6. In the Agents window: new session on that host, folder ${repo}, agent "Orchestrator".
     Send: start
- 8. Read the plan it shows you. Reply APPROVE PLAN to let it file the issues and start building.
-    To stop the loop at the next step: create .goal-loop/STOP (delete it and send "resume" to continue).
+ 7. Read the plan it shows you. Reply APPROVE PLAN to let it file the issues and start building.
+
+ Ralph loop (a fresh copilot -p Orchestrator run per step; no host, no trims):
+ 5. ${cf} loop --mode ralph --repo "${repo}" --dry-run      (see what the first run would do)
+ 6. ${cf} loop --mode ralph --repo "${repo}"                (the first run writes .goal-loop/PLAN.md and stops)
+ 7. Read .goal-loop/PLAN.md, then: ${cf} loop approve-plan --repo "${repo}"
+    and run the loop again. It runs with --allow-all-tools: use a sandbox (see the README).
+
+ Either mode: create .goal-loop/STOP to stop at the next step.
 `;
 }
 
 /**
  * The whole bootstrap.
- * @param {{ repo: string, config?: string, dryRun?: boolean, force?: boolean, install?: boolean, link?: boolean, allowSameFamily?: boolean, print?: boolean, log: any }} o
+ * @param {{ repo: string, config?: string, dryRun?: boolean, force?: boolean, install?: boolean, link?: boolean, allowSameFamily?: boolean, print?: boolean, start?: boolean, log: any }} o
  */
 export async function bootstrap(o) {
   const { log, dryRun = false } = o;
@@ -259,7 +284,18 @@ export async function bootstrap(o) {
   log.info(`files in ${repo}:`);
   const results = writeFiles(repo, plannedFiles(cfg, repo), log, { dryRun, force: o.force });
   if (missing.length) log.warn(`missing before the first run: ${missing.join(', ')}`);
-  const steps = nextSteps(repo, cfg, { linked });
+  if (o.start) {
+    // Persistent mode: schedule the watcher and start the standalone host for this repo now.
+    const { loadConfig, resolveConfig } = await import('./config.mjs');
+    const kaFile = path.join(repo, '.goal-loop', 'copilot-forever.config.json');
+    const ka = exists(kaFile) ? loadConfig(kaFile) : resolveConfig(keepAliveConfig(cfg, repo), path.dirname(kaFile), kaFile);
+    const { install } = await import('./install.mjs');
+    const { startHost } = await import('./host.mjs');
+    log.info('starting the keep-alive layer (--start):');
+    await install(ka, log, { dryRun });
+    await startHost(ka, log, { dryRun, viaService: false });
+  }
+  const steps = nextSteps(repo, cfg, { linked, started: !!o.start });
   if (o.print !== false) process.stdout.write(steps);
   return { cfg, results, missing, steps };
 }

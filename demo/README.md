@@ -1,26 +1,29 @@
-# Demo: Pocket Board, built by the goal loop
+# Demo: LoopBoard, built by the goal loop
 
-This demo builds **Pocket Board** ([GOAL.md](GOAL.md)), a small browser task board in TypeScript, from an empty GitHub repository. The work runs in GitHub Copilot: the Orchestrator agent in VS Code's Agents window, on a standalone agent host kept alive by copilot-forever. Expected loop time: about 3 to 5 hours for 8 to 10 issues. The demo is designed to be recorded; [VIDEO-OUTLINE.md](VIDEO-OUTLINE.md) is the shot list.
+This demo builds **LoopBoard** ([GOAL.md](GOAL.md)), a local-first kanban board that runs in the browser, from an empty GitHub repository (`seangalliher/loopboard`). Everything runs in GitHub Copilot. Expected loop time: a few hours for about 10 to 12 issues. [VIDEO-SCRIPT.md](VIDEO-SCRIPT.md) is the video built around this run.
 
-The demo config ([goal-loop.config.json](goal-loop.config.json)) differs from the kit's defaults in three ways, all chosen for the video:
+Models ([goal-loop.config.json](goal-loop.config.json)): `claude-sonnet-5.5` for the Orchestrator, Architect and Builder; `gpt-6.1-sol` for the Diff Reviewer (fallback `gpt-6-luna`, also not the builder's family).
+
+The same goal runs in either mode. Steps 1 to 6 are shared; then follow **A** (persistent session, the one in the video) or **B** (Ralph loop). To show both, use two repositories, for example `loopboard` and `loopboard-ralph`.
+
+The demo config differs from the kit's defaults in three ways, all for the video:
 
 | Setting | Demo | Default | Why |
 |---|---|---|---|
 | `github.mergePolicy` | `agent-after-green` | `human` | The loop merges its own PRs after green CI and a matching gate receipt, so it can run unattended. It still never pushes to the default branch and never uses auto-merge. |
-| `keepAlive.port` | `47811` | `47801` | Leaves 47801 free for any agent host you already run. |
-| `keepAlive.thresholdMiB` | `25` | `400` | A log trim happens within the recording instead of after days. |
+| `keepAlive.port` | `47811` | `47801` | Leaves 47801 free for an agent host you already run. |
+| `keepAlive.thresholdMiB` | `25` | `400` | A log trim happens within the recording. It becomes `trim.thresholdMiB` in `loopboard/.goal-loop/copilot-forever.config.json`; set it back to `400` there after recording. |
 
 ## What you need
 
-- A machine with Node 22 or newer, Git, the GitHub CLI (`gh`, logged in), VS Code stable with the `code` command on PATH, and GitHub Copilot with access to the models in the demo config.
-- A GitHub account where you can create a repository. The steps use `pocket-board` as the name.
-- Optional: the Copilot CLI, for the version check.
-
-## Steps
+- Node 22 or newer, Git, the GitHub CLI (`gh`, logged in with `gh auth login`), VS Code stable with the `code` command on PATH, and GitHub Copilot with access to the two models.
+- For mode B: the Copilot CLI (`copilot`, logged in).
 
 All commands run in an ordinary terminal (PowerShell on Windows, a shell on macOS or Linux), in your projects folder.
 
-**1. Get the kit** (or skip this if you already have it):
+## Shared steps
+
+**1. Get the kit:**
 
 ```bash
 git clone https://github.com/seangalliher/copilot-forever.git
@@ -29,25 +32,25 @@ git clone https://github.com/seangalliher/copilot-forever.git
 **2. Create the demo repository** with one initial commit (the gate needs a commit to test):
 
 ```bash
-gh repo create pocket-board --public --add-readme --license mit --clone
+gh repo create loopboard --public --add-readme --license mit --clone
 ```
 
-**3. Bootstrap it with the demo config.** This installs copilot-forever (`npm ci`, `npm link`) and writes the agents, standing orders, gate script and handoff template into the repo:
+**3. Bootstrap it with the demo config.** This installs the kit (`npm ci`, `npm link`), checks the tools, and writes the four agents, the standing orders, the gate script and the handoff template into `loopboard`. For mode A add `--start`, which also schedules the watcher every 10 minutes and starts the standalone agent host; leave it out for mode B.
 
 ```bash
-node copilot-forever/bootstrap.mjs --repo pocket-board --config copilot-forever/demo/goal-loop.config.json
+node copilot-forever/bootstrap.mjs --repo loopboard --config copilot-forever/demo/goal-loop.config.json --start
 ```
 
-**4. Put the goal in place:**
+**4. Check the models** in `loopboard/.github/agents/*.agent.md` (the `model:` lines) and put the goal in place. (In mode A you can paste the goal into the chat instead; the Orchestrator saves it to this file.)
 
 ```bash
-cp copilot-forever/demo/GOAL.md pocket-board/.goal-loop/GOAL.md
+cp copilot-forever/demo/GOAL.md loopboard/.goal-loop/GOAL.md
 ```
 
 **5. Commit the scaffolding** to the default branch yourself. The loop itself never pushes to the default branch.
 
 ```bash
-cd pocket-board
+cd loopboard
 ```
 
 ```bash
@@ -58,44 +61,68 @@ git add .github/agents .github/copilot-instructions.md .goal-loop
 git commit -m "Add goal-loop agents and goal" && git push
 ```
 
-**6. Start the keep-alive layer:**
+**6. Let GitHub Pages deploy from Actions** (the goal deploys to Pages; changing repository settings is yours to do, not the agents'):
 
 ```bash
-copilot-forever doctor --config .goal-loop/copilot-forever.config.json
+gh api -X POST repos/seangalliher/loopboard/pages -f build_type=workflow
 ```
 
-```bash
-copilot-forever install --config .goal-loop/copilot-forever.config.json
-```
+Recommended: turn on branch protection for `main` (require a pull request and passing checks).
 
-```bash
-copilot-forever host start --config .goal-loop/copilot-forever.config.json
-```
+## A. Persistent session (VS Code)
 
-**7. Connect VS Code.** Add the standalone host to the `chat.remoteAgentHosts` user setting with address `localhost:47811` and the token from `~/.copilot-forever/token.txt`. Reload the window.
+**A1. Connect VS Code.** Add the standalone host to the `chat.remoteAgentHosts` user setting with address `localhost:47811` and the token from `~/.copilot-forever/token.txt`, as the bootstrap printed. Reload the window. To check the host: `copilot-forever host status --config .goal-loop/copilot-forever.config.json`.
 
-**8. Start the loop.** In the Agents window, start a new session on that host, choose the `pocket-board` folder and the **Orchestrator** agent, and send:
+**A2. Start the loop.** In the Agents window, start a new session on **that** host (not VS Code's built-in one), choose the `loopboard` folder and the **Orchestrator** agent, and send:
 
 ```text
 start
 ```
 
-**9. Approve the plan.** The Architect writes `.goal-loop/PLAN.md` and the Orchestrator shows you the issues. Read them. Ask for changes if you want any, then reply:
+**A3. Approve the plan.** The Architect writes `.goal-loop/PLAN.md` and the Orchestrator shows you the issues. Ask for changes if you want any; when it is right, reply exactly:
 
 ```text
 APPROVE PLAN
 ```
 
-The issues appear in the repository with the `goal-loop` label, and the loop begins.
+The issues appear with the `goal-loop` label and the loop begins. You can quit VS Code at any time; the session keeps working. To stop at the next step, create `.goal-loop/STOP`; delete it and send `resume` to continue.
 
-**10. Let it run.** You can close VS Code at any time; the session keeps working. To watch, open the repository's Pull requests and Issues pages, or `.goal-loop/handoff.md`. To stop it at the next step, create the file `.goal-loop/STOP`; delete it and send `resume` to continue.
+**What you will see**
 
-## What to expect
+- One PR per batch (one to three coupled issues), each with the review rounds, the gate receipt summary and `Closes #…` lines, merged after CI is green.
+- Diff Reviewer findings fixed before each commit. An issue not converged after review round 3 is parked with `goal-loop:needs-human` and a comment; the loop continues with other work.
+- A log trim once the session log passes 25 MiB **and** a compaction has completed: the Orchestrator writes a handoff addendum and stops at a safe point; within about 10 minutes the watcher stops the host, trims, restarts it and sends "Continue."; a notification says *Agent log trimmed and resumed (X -> Y MiB)*. The watcher's log is `~/.copilot-forever/logs/copilot-forever.log`. If no compaction has happened yet, the trim is refused, the agent is told to continue, and it asks again later.
+- At the end, a final addendum in `.goal-loop/handoff.md` with what was built, the PRs, receipts and time taken.
 
-- One PR per batch (one to three coupled issues), each with the review rounds, the gate receipt summary and `Closes #…` lines.
-- Diff Reviewer findings fixed before each commit. An issue still not converged after review round 3 is parked with the `goal-loop:needs-human` label and a comment; the loop continues with other work.
-- A log trim when the session log passes 25 MiB and a compaction has happened: the agent stops at a safe point, the watcher trims and restarts the host, and the agent continues on its own. To trigger one on camera, lower `trim.thresholdMiB` in `.goal-loop/copilot-forever.config.json` below the current size (`copilot-forever host status` shows it). The agent picks it up at its next safe point, within about 10 minutes.
-- At the end, a final addendum in `.goal-loop/handoff.md` with what was built, the PRs, the receipts and the time taken.
+## B. Ralph loop (`copilot -p`, no VS Code needed)
+
+Run it in a sandbox (a dev container, VM or dedicated account): each run uses `--allow-all-tools`. See [Permissions](../templates/goal-loop/README.md#permissions-read-this-before-the-first-run).
+
+**B1. Preview the first run** (writes nothing, runs nothing):
+
+```bash
+copilot-forever loop --mode ralph --repo . --dry-run
+```
+
+**B2. Plan.** The first run has the Architect write `.goal-loop/PLAN.md`, then the runner stops:
+
+```bash
+copilot-forever loop --mode ralph --repo .
+```
+
+**B3. Approve the plan** after reading `.goal-loop/PLAN.md` (the approval is tied to the plan's exact content):
+
+```bash
+copilot-forever loop approve-plan --repo .
+```
+
+**B4. Run the loop.** The next runs file the issues, then do one batch per run, until the queue is done, `.goal-loop/STOP` exists, a cap is hit, or three runs in a row make no progress:
+
+```bash
+copilot-forever loop --mode ralph --repo .
+```
+
+Each run is logged to `.goal-loop/ralph/runs.jsonl` (step, start, end, exit code, issues and PRs touched), with its output, usage and transcript next to it.
 
 ## Afterwards
 
@@ -103,7 +130,9 @@ The issues appear in the repository with the `goal-loop` label, and the loop beg
 npm ci && npm run dev
 ```
 
-To remove the keep-alive schedule (the session's host keeps running until you stop it):
+The live board is at `https://seangalliher.github.io/loopboard/` once the Pages workflow has run on `main`.
+
+Mode A cleanup: put `trim.thresholdMiB` back to `400`, or remove the schedule and stop the host:
 
 ```bash
 copilot-forever uninstall --stop-host --config .goal-loop/copilot-forever.config.json
@@ -111,7 +140,8 @@ copilot-forever uninstall --stop-host --config .goal-loop/copilot-forever.config
 
 ## If something goes wrong
 
-- **The plan or an issue is not what you want:** reply in the chat; the Orchestrator sends changes to the Architect. Before approval nothing is filed.
-- **A notification says "resume needed":** open the session and send `continue from the latest handoff addendum`.
-- **An issue is parked (`goal-loop:needs-human`):** read its last comment, decide, comment your decision on the issue, and tell the Orchestrator.
-- **Logs:** `~/.copilot-forever/logs/copilot-forever.log` (watcher, trims, continues) and `.goal-loop/receipts/` (gates).
+- **The plan is not what you want:** mode A, reply in the chat; mode B, edit `GOAL.md`, delete `PLAN.md` and run the loop again. Nothing is filed before approval.
+- **A notification says "resume needed"** (mode A): open the session and send `continue from the latest handoff addendum`.
+- **An issue is parked (`goal-loop:needs-human`):** read its last comment, decide, comment your decision on the issue, remove the label, and tell the Orchestrator (mode A) or run the loop again (mode B).
+- **Mode B stopped with "stalled":** read the last entries of `.goal-loop/ralph/runs.jsonl` and the run's transcript; usually a batch waits on something only you can do.
+- **Logs:** `~/.copilot-forever/logs/` (mode A watcher and host), `.goal-loop/receipts/` (gates), `.goal-loop/ralph/` (mode B runs).

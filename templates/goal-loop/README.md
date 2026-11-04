@@ -1,6 +1,6 @@
 # The goal loop
 
-A repeatable agentic loop that runs entirely in GitHub Copilot (VS Code's Agents window and the Copilot CLI). You give it a goal and approve one plan; it files GitHub issues and works them to merged pull requests, reviewing every change with a second model family and gating every batch with your own test suite. It runs on [copilot-forever](../../README.md), so one Orchestrator session keeps going for hours or days, across VS Code restarts and log trims.
+A repeatable agentic loop that runs entirely in GitHub Copilot (VS Code's Agents window and the Copilot CLI). You give it a goal and approve one plan; it files GitHub issues and works them to merged pull requests, reviewing every change with a second model family and gating every batch with your own test suite. It runs in two modes: as one persistent Orchestrator session on [copilot-forever](../../README.md), which keeps going for hours or days across VS Code restarts and log trims, or as a [Ralph loop](#ralph-mode) of fresh `copilot -p` runs.
 
 ```mermaid
 flowchart TD
@@ -56,8 +56,10 @@ Bootstrap checks the tools, runs `npm ci` and `npm link` in the kit, writes the 
 3. Commit the scaffolding yourself.
 4. Start the keep-alive layer: `copilot-forever doctor`, `install`, `host start`, each with `--config .goal-loop/copilot-forever.config.json`.
 5. Add the standalone host to VS Code's `chat.remoteAgentHosts` setting (address `localhost:<port>`, token from `~/.copilot-forever/token.txt`).
-6. In the Agents window, start a session on that host with the **Orchestrator** agent and send `start`.
+6. In the Agents window, start a session on that host with the **Orchestrator** agent and send `start` (or paste the goal).
 7. Reply `APPROVE PLAN` when the plan is right.
+
+Steps 4 to 7 are the persistent session. `bootstrap.mjs --start` does step 4 for you (it schedules the watcher and starts the host). For [Ralph mode](#ralph-mode), skip steps 4 to 7 and run `copilot-forever loop --mode ralph` instead.
 
 Preview everything first with `--dry-run`, which writes nothing. The same bootstrap is available as `copilot-forever goal-loop --repo <path> [--goal-config <file>]` once the kit is installed.
 
@@ -65,7 +67,7 @@ Preview everything first with `--dry-run`, which writes nothing. The same bootst
 
 | Key | Default | Meaning |
 |---|---|---|
-| `models.orchestrator` / `architect` / `builder` | `claude-sonnet-5.5` / `claude-opus-5.5` / `claude-sonnet-5.5` | Written into each agent's `model:` line and passed explicitly on every delegation. |
+| `models.orchestrator` / `architect` / `builder` | `claude-sonnet-5.5` (all three) | Written into each agent's `model:` line and passed explicitly on every delegation. |
 | `models.reviewer` / `reviewerFallback` | `gpt-6.1-sol` / `gpt-6-luna` | Must be a different model family from the builder; bootstrap refuses otherwise (`--allow-same-family` overrides, not recommended). |
 | `gate.command` | `npm test` | Your repository's full test command. |
 | `gate.timeoutMinutes` | `30` | The gate fails when the command runs longer. |
@@ -102,6 +104,69 @@ node .goal-loop/gate.mjs --verify batch-3
 
 The first runs the full test command and writes `.goal-loop/receipts/batch-3.json` (result, commit, tree, command, exit code, duration, a hash of the output, the log path and its tail). The second exits 0 only if that receipt passed for the current `HEAD` and the tree is still clean. Exit codes: 0 pass, 1 tests failed, 2 usage or config error, 3 refused (dirty tree or no commit), 4 verify failed.
 
+## Ralph mode
+
+The same agents and standing orders also run as a Ralph loop: an outer runner starts a fresh, non-interactive `copilot -p` Orchestrator for each step, and the handoff file and the GitHub issues carry the state between runs. It does not need the standalone host, the log trim or the Agent Host Protocol. See [Persistent session or Ralph loop?](../../README.md#persistent-session-or-ralph-loop) for the trade-off.
+
+```bash
+copilot-forever loop --mode ralph --repo path/to/your-repo --dry-run
+```
+
+```bash
+copilot-forever loop --mode ralph --repo path/to/your-repo
+```
+
+Each run is one step, chosen by the runner from the files and the queue:
+
+| State | Step for this run |
+|---|---|
+| No `.goal-loop/PLAN.md` | **plan**: the Architect writes the plan; the runner then stops and waits for you. |
+| A plan you have not approved, or one changed since you approved it | Stop: read the plan, then run `copilot-forever loop approve-plan --repo <path>` (or edit `GOAL.md`, delete `PLAN.md`, and run again for a new plan). |
+| Approved plan, no goal-loop issues yet | **file**: the Architect files the issues (capped). |
+| Open goal-loop issues that are not parked | **batch**: at most one batch (build, review rounds, gate, PR, merge policy, closure), then a handoff addendum. |
+| Every goal-loop issue closed or parked | Stop: done. |
+
+The runner stops when the STOP file exists, when the queue is done, at `ralph.maxIterations` runs or `caps.maxBatchesPerRun` batch runs, or when `ralph.stallLimit` runs in a row touch no issue and no PR (the stall guard). With `mergePolicy: human`, a batch that waits on your merge makes no progress, so the stall guard stops the loop until you merge and run it again.
+
+**Each run's command line** pins the agent and the model, and points the prompt at a file the runner writes:
+
+```text
+copilot -p "Ralph mode: read .goal-loop/ralph/run-003-batch-<time>.prompt.md and follow it exactly."
+        --agent Orchestrator --model <models.orchestrator>
+        --allow-all-tools --no-ask-user --no-auto-update
+        --deny-tool=<each ralph.denyTools entry>  [--deny-tool=shell(gh pr merge) when mergePolicy is human]
+        [--max-ai-credits <ralph.maxAiCreditsPerRun>]
+        --usage-output-file .goal-loop/ralph/<run>.usage.json --share .goal-loop/ralph/<run>.transcript.md
+```
+
+The Orchestrator then delegates to the Architect, Builder and Diff Reviewer with their own models, as in the persistent session.
+
+**Logs**, all under `.goal-loop/ralph/` (gitignored): `runs.jsonl` has one line per run (step, start, end, exit code, timed out, issues and PRs touched, open issues before and after, progress), plus each run's output log, usage file and transcript. `runner.log` has the runner's own lines.
+
+### Permissions: read this before the first run
+
+Non-interactive Copilot runs cannot ask you to approve a tool, so the CLI requires `--allow-all-tools`: **every run may execute any shell command and edit any file the agent decides to**, without asking. Deny rules (`ralph.denyTools`) are checked first and block what they match, but they are a seatbelt, not a boundary: a command can be phrased many ways. Treat a Ralph loop like an unattended CI job with your credentials:
+
+- Run it in a sandbox: a dev container, a VM, or a dedicated user account with only this repository checked out.
+- Give it a GitHub token scoped to this one repository (a fine-grained token for `gh`), not your everyday login.
+- Keep secrets out of the environment, and out of the repository.
+- Turn on branch protection for the default branch (require a PR and passing checks), so even a misbehaving run cannot push to it.
+- Cap spend with `ralph.maxAiCreditsPerRun` and the run caps, and watch your Copilot usage on the first runs.
+
+The runner drops a few variables of whatever started it (other tools' session variables, `VSCODE_IPC_HOOK*`, `ELECTRON_RUN_AS_NODE`, `NODE_OPTIONS`) before starting `copilot`; everything else in your environment reaches the agent.
+
+| Key (`ralph.…`) | Default | Meaning |
+|---|---|---|
+| `copilotCommand` / `ghCommand` | `copilot` / `gh` | The CLIs, as a command name or `[executable, ...args]`. |
+| `agent` | `Orchestrator` | The `--agent` value: the agent's `name:`. |
+| `maxIterations` | `12` | Runs per invocation of the loop. |
+| `stallLimit` | `3` | Consecutive runs without progress before the loop stops. |
+| `iterationTimeoutMinutes` | `120` | A run that takes longer is stopped. |
+| `pauseSeconds` | `30` | Pause between runs. |
+| `maxAiCreditsPerRun` | `0` (no limit) | Passed as `--max-ai-credits` (the CLI minimum is 30). |
+| `denyTools` | `gh repo delete`, `gh repo edit`, `gh secret`, `gh auth`, `git push --force` | Each passed as `--deny-tool=shell(...)`. |
+| `extraArgs` | `[]` | More `copilot` flags, for example `["--reasoning-effort", "high"]`. |
+
 ## What this pattern deliberately leaves out
 
 It is distilled from a loop that ran a large project for months; the parts that only made sense there are gone:
@@ -114,4 +179,4 @@ It is distilled from a loop that ran a large project for months; the parts that 
 
 ## Try it
 
-[The Pocket Board demo](../../demo/README.md) builds a small browser app from an empty repository in a few hours of loop time.
+[The LoopBoard demo](../../demo/README.md) builds a local-first kanban board from an empty repository in a few hours of loop time, in either mode.

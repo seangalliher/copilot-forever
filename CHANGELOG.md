@@ -8,7 +8,15 @@ All notable changes to this project are documented here. The format follows [Kee
 
 - **Goal loop** (`templates/goal-loop/`): Orchestrator, Architect, Builder and Diff Reviewer custom agents for GitHub Copilot; shared standing orders; a receipted gate script (`gate.mjs`); a handoff template; and a config for models, gate command, caps, merge policy and labels. Safe defaults: one human plan approval (`APPROVE PLAN`), caps, a STOP file, PRs only with no auto-merge, and a reviewer on a different model family (bootstrap refuses the same family).
 - `bootstrap.mjs` and `copilot-forever goal-loop`: one-command setup on a new machine. Checks prerequisites, installs the kit, renders the templates into a repository without overwriting its own files, writes its keep-alive config, and prints the manual steps. `--dry-run` writes nothing.
-- Demo (`demo/`): the Pocket Board goal, exact reproduction steps, a demo config, and a segment-by-segment video outline.
+- **Ralph mode** (`copilot-forever loop --mode ralph`): the same agents run as fresh `copilot -p` Orchestrator runs, one step per run (plan, file issues, one batch), with the agent and model pinned on every call. It stops on an empty queue, the STOP file, the caps, or a stall guard. Plan approval is `copilot-forever loop approve-plan`, bound to the plan's hash. Each run is logged to `.goal-loop/ralph/runs.jsonl`. Dry-run mode. Needs no standalone host, trim or AHP client.
+- `bootstrap.mjs --start`: also schedules the watcher and starts the standalone host (persistent mode).
+- The Orchestrator accepts a goal pasted into the chat and saves it to `.goal-loop/GOAL.md`.
+- Demo (`demo/`): the LoopBoard goal, reproduction steps for both modes, a demo config, and the video script.
+- README: "Persistent session or Ralph loop?" comparison.
+
+### Changed
+
+- Default models: `claude-sonnet-5.5` for the Orchestrator, Architect and Builder; `gpt-6.1-sol` for the Diff Reviewer.
 
 ### Fixed
 

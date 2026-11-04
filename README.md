@@ -1,17 +1,17 @@
 # copilot-forever
 
-**An AI dev team that runs for days, entirely in GitHub Copilot.** Give it a goal, approve one plan, and a Copilot Orchestrator agent files the GitHub issues, has a Builder implement them, has a Diff Reviewer on a different model family check every change, gates each batch with your own test suite, and opens pull requests. It keeps going across VS Code restarts and through its own log trims.
+**An AI dev team that runs for days, entirely in GitHub Copilot.** Give it a goal, approve one plan, and a Copilot Orchestrator agent files the GitHub issues, has a Builder implement them, has a Diff Reviewer on a different model family check every change, gates each batch with your own test suite, and opens pull requests. It runs either as one live session that keeps going across VS Code restarts and through its own log trims, or as a Ralph-style loop of fresh `copilot -p` runs.
 
 By **Sean Galliher**. MIT licensed.
 
-> **Headline demo: [Pocket Board](demo/README.md).** A small browser task board built from an empty repository in a few hours of loop time, with two human messages: `start` and `APPROVE PLAN`. The [video outline](demo/VIDEO-OUTLINE.md) walks through the whole solution.
+> **Headline demo: [LoopBoard](demo/README.md).** A local-first kanban board built from an empty repository (`seangalliher/loopboard`) in a few hours of loop time. The only human input is the goal and one plan approval. The [video script](demo/VIDEO-SCRIPT.md) walks through the whole solution.
 
-There are two layers. Use the first on its own, or both together:
+The core is the **agent team**: an Architect that plans and files issues, a Builder, a Diff Reviewer on a different model family, and an Orchestrator with review rounds and one receipted test gate per batch. It runs in either of two modes (see [Persistent session or Ralph loop?](#persistent-session-or-ralph-loop)). The repository has two layers; use the first on its own, or both together:
 
 | Layer | What it does | Where |
 |---|---|---|
 | **Keep-alive kit** | Keeps **one** long-lived Copilot agent session running for days: a standalone VS Code agent host that survives editor restarts, and automatic `events.jsonl` trims at safe points the agent chooses, followed by an automatic continue. | this README, `bin/`, `src/` |
-| **Goal loop** | Four Copilot custom agents (Orchestrator, Architect, Builder, Diff Reviewer), shared standing orders, a receipted test gate and a handoff file, with safe defaults: plan approval, caps, a STOP file, PRs only. | [templates/goal-loop](templates/goal-loop/README.md) |
+| **Goal loop** | Four Copilot custom agents (Orchestrator, Architect, Builder, Diff Reviewer), shared standing orders, a receipted test gate and a handoff file, with safe defaults: plan approval, caps, a STOP file, PRs only. Runs as a persistent session (on the keep-alive kit) or as a Ralph loop (`copilot-forever loop --mode ralph`, no kit needed). | [templates/goal-loop](templates/goal-loop/README.md) |
 
 On a new machine, one command clones the kit, installs it, and renders the goal loop into your repository:
 
@@ -238,13 +238,29 @@ The goal loop adds its own:
 - **Not yet proven end to end.** The goal-loop templates are distilled from a loop that ran for months, but this generic version has not yet completed a full run. The demo run is its first; expect to tune the agent files after it.
 - **Cost.** A loop that runs for hours uses premium requests continuously. Watch your Copilot usage on the first runs, and keep `caps.maxBatchesPerRun` low until you know your rate.
 
-## Compared with Ralph loops
+## Persistent session or Ralph loop?
 
-Ralph loops (and the swarm orchestrators built on the same idea) run a fresh, non-interactive `copilot -p "<prompt>"` per iteration. State lives in files, every iteration starts with a clean context, and nothing is long-lived, so there is no log to grow and nothing to keep alive. That makes them simple, robust and easy to sandbox.
+A **Ralph loop** is a `while` loop that runs the agent with a fresh context each time: every run starts cold, reads its state from files, does one unit of work and exits. GitHub's [awesome-copilot](https://github.com/github/awesome-copilot/tree/main/cookbook/copilot-sdk) has Ralph loop recipes for the Copilot SDK in five languages (`ralph-loop.md` in each language folder). They are the prior art for the goal loop's Ralph mode.
 
-copilot-forever is for the other case: **one interactive session** you also talk to in VS Code, which keeps its working context, custom agent, permissions and chat history across days, and survives editor restarts. The cost is the machinery above: a host outside the editor, log trims at safe points, and a continue message over AHP.
+The goal loop runs either way. The **agent team is the same in both**: the Architect's plan and issues, the Builder, the cross-family Diff Reviewer with up to three review rounds, the Orchestrator's batching, one receipted gate per batch, one PR per batch, verified closure. What differs is what carries the Orchestrator from one batch to the next.
 
-Use a Ralph loop when each unit of work can start cold from files. Use copilot-forever when the value is in one continuous session.
+| | Persistent session | Ralph loop |
+|---|---|---|
+| How it runs | One Orchestrator session in VS Code's Agents window, on the standalone host | `copilot-forever loop --mode ralph`: a fresh `copilot -p` Orchestrator run per step (plan, file issues, one batch) |
+| Memory between batches | The session's own context (summarised by compaction) plus the handoff file | The handoff file and the GitHub issues only |
+| Watching and steering | Live: read the chat, type a correction, answer a question | After the fact: the run log, transcripts, PRs; steer by editing files or issues between runs |
+| Plan approval | Reply `APPROVE PLAN` in the chat | `copilot-forever loop approve-plan` (bound to the plan's hash) |
+| Survives VS Code quitting | Yes, through the standalone host | Not affected: it does not use VS Code |
+| Log growth | Needs copilot-forever's trim | None: each run's log is small and thrown away |
+| Depends on Copilot internals | Yes: `events.jsonl` layout, the Agent Host Protocol, `code agent ps` | No: only the Copilot CLI's documented flags |
+| Tool approvals | As configured in the VS Code session | `--allow-all-tools` (required for non-interactive runs), with deny rules |
+| Moving parts | Host service, watcher, trim, AHP client | One Node process and `copilot` |
+
+**Ralph is simpler and more robust.** It is immune to log growth and to changes in Copilot's internal formats, a crash costs one run, and there is nothing to keep alive. **The persistent session is more present.** It is one live session you can watch and steer in VS Code, it remembers what went wrong earlier in the run, and copilot-forever keeps it alive across editor restarts and log growth.
+
+The difference is smaller than it looks. A trim is effectively a soft restart: the session continues from its latest compaction summary, which is what Copilot's own compaction already does when the context fills. The persistent session keeps a little more than a Ralph run (the summary, the chat, the session's settings), and costs the keep-alive machinery.
+
+Pick Ralph mode for unattended runs on a build machine or in a sandbox, or if you do not want to depend on Copilot internals. Pick the persistent session when you want to watch and steer.
 
 ## Security notes
 
@@ -252,6 +268,7 @@ Use a Ralph loop when each unit of work can start cold from files. Use copilot-f
 - **The token file grants full control of the host.** Anyone with the token can drive your agent on localhost. It is created with mode `600` on macOS and Linux, and with an ACL for your user only on Windows. It is never logged: the host's startup banner is masked in its host log, and every log line passes through redaction.
 - **Localhost only.** The host is always started with `--host localhost` and a connection token. The kit never passes `0.0.0.0` or `--without-connection-token`.
 - **Clean environment.** The host, and every shell the agent opens, starts with an allowlist of OS variables (PATH, HOME/USERPROFILE, temp, locale and the like) plus any names in `host.passEnv`. Variables of whatever ran the command (for example VS Code's `VSCODE_*`, `ELECTRON_RUN_AS_NODE`, `NODE_OPTIONS`, other tools' session variables, tokens in your shell) do not leak into the long-lived agent. Run `install` and `host start` from an ordinary terminal.
+- **Ralph mode runs with `--allow-all-tools`.** Non-interactive Copilot runs require it, so every run can execute any command. See [Permissions](templates/goal-loop/README.md#permissions-read-this-before-the-first-run) before the first run.
 - **Sandbox if you auto-approve tools.** An agent that runs unattended for days with auto-approved tools can do anything your user account can. Prefer a dedicated user account, VM, container or dev box, keep credentials it does not need out of reach, and review what it pushes.
 
 ## Tested versions

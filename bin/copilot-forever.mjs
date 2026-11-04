@@ -32,7 +32,11 @@ Commands
        [--stop-host]          uninstall: also stop the running host
   snippet                     Print the agent-side instructions with your configured paths
   goal-loop --repo <folder>   Render the goal-loop agents, gate and handoff into a repository
-       [--goal-config <file>] [--no-install] (same as bootstrap.mjs)
+       [--goal-config <file>] [--no-install] [--start] (same as bootstrap.mjs)
+  loop --mode ralph [--repo <folder>] [--max-iterations <n>]
+                              Run the goal loop as fresh copilot -p Orchestrator runs (Ralph mode)
+  loop approve-plan [--repo <folder>]
+                              Record your approval of .goal-loop/PLAN.md (Ralph mode)
 
 Options
   --config <file>   Config file (default: $COPILOT_FOREVER_CONFIG, ./${CONFIG_NAME}, ~/.copilot-forever/config.json)
@@ -59,6 +63,9 @@ const { values: o, positionals } = parseArgs({
     'no-install': { type: 'boolean', default: false },
     'no-link': { type: 'boolean', default: false },
     'allow-same-family': { type: 'boolean', default: false },
+    start: { type: 'boolean', default: false },
+    mode: { type: 'string' },
+    'max-iterations': { type: 'string' },
     help: { type: 'boolean', short: 'h', default: false },
   },
 });
@@ -77,8 +84,26 @@ async function main() {
     if (!o.repo) throw new Refusal('usage: copilot-forever goal-loop --repo <folder> [--goal-config <file>] [--dry-run] [--force] [--no-install]', 2);
     const { bootstrap } = await import('../src/goal-loop.mjs');
     await bootstrap({ repo: o.repo, config: o['goal-config'], dryRun, force: o.force, install: !o['no-install'], link: !o['no-link'],
-      allowSameFamily: o['allow-same-family'], log: new Logger({ dryRun, prefix: 'goal-loop: ' }) });
+      allowSameFamily: o['allow-same-family'], start: o.start, log: new Logger({ dryRun, prefix: 'goal-loop: ' }) });
     return 0;
+  }
+  if (cmd === 'loop') {
+    const ralph = await import('../src/ralph.mjs');
+    const repo = path.resolve(o.repo ?? '.');
+    const log = new Logger({ dryRun, prefix: 'loop: ', file: dryRun ? undefined : path.join(repo, '.goal-loop', 'ralph', 'runner.log') });
+    if (sub === 'approve-plan') {
+      ralph.approvePlan(repo, log);
+      return 0;
+    }
+    if (o.mode === 'persistent') {
+      log.info('persistent mode runs in VS Code: start a session on the standalone host with the Orchestrator agent and send "start" (see templates/goal-loop/README.md)');
+      return 0;
+    }
+    if (o.mode !== 'ralph') throw new Refusal('usage: copilot-forever loop --mode ralph [--repo <folder>] [--max-iterations <n>] [--dry-run] | loop approve-plan [--repo <folder>]', 2);
+    const max = o['max-iterations'] === undefined ? undefined : Number(o['max-iterations']);
+    if (max !== undefined && !(Number.isInteger(max) && max > 0)) throw new Refusal('--max-iterations must be a positive integer', 2);
+    const r = await ralph.ralphLoop({ repo, log, dryRun, maxIterations: max });
+    return r.exitCode;
   }
 
   const cfg = loadConfig(o.config);

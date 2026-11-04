@@ -260,3 +260,18 @@ test('no project-specific vocabulary in the kit, the templates or the demo', () 
   walk(ROOT);
   assert.deepEqual(hits, []);
 });
+
+test('bootstrap --start --dry-run shows the schedule and host start, and changes nothing', async () => {
+  const { d } = gitRepo();
+  try {
+    const log = logger();
+    const r = await bootstrap({ repo: d, dryRun: true, install: false, start: true, print: false, log });
+    const text = log.lines.join('\n');
+    assert.match(text, /starting the keep-alive layer/);
+    assert.match(text, /would (run|write)/);
+    assert.match(text, /would (run \(clean env|start the host)|already listening/);
+    assert.match(r.steps, /done by --start/);
+    assert.match(r.steps, /loop --mode ralph/);
+    assert.deepEqual(fs.readdirSync(d).filter((n) => n !== '.git'), []);
+  } finally { rm(d); }
+});

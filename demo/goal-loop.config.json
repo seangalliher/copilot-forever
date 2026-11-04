@@ -1,7 +1,7 @@
 {
   "models": {
     "orchestrator": "claude-sonnet-5.5",
-    "architect": "claude-opus-5.5",
+    "architect": "claude-sonnet-5.5",
     "builder": "claude-sonnet-5.5",
     "reviewer": "gpt-6.1-sol",
     "reviewerFallback": "gpt-6-luna"
@@ -32,5 +32,23 @@
   "keepAlive": {
     "port": 47811,
     "thresholdMiB": 25
+  },
+  "ralph": {
+    "copilotCommand": "copilot",
+    "ghCommand": "gh",
+    "agent": "Orchestrator",
+    "maxIterations": 12,
+    "stallLimit": 3,
+    "iterationTimeoutMinutes": 120,
+    "pauseSeconds": 30,
+    "maxAiCreditsPerRun": 0,
+    "denyTools": [
+      "shell(gh repo delete)",
+      "shell(gh repo edit)",
+      "shell(gh secret)",
+      "shell(gh auth)",
+      "shell(git push --force)"
+    ],
+    "extraArgs": []
   }
 }
