@@ -13,6 +13,7 @@ All notable changes to this project are documented here. The format follows [Kee
 - The Orchestrator accepts a goal pasted into the chat and saves it to `.goal-loop/GOAL.md`.
 - Demo (`demo/`): the LoopBoard goal, reproduction steps for both modes, a demo config, and the video script.
 - README: "Persistent session or Ralph loop?" comparison.
+- [Orchestrator map](docs/orchestrator-map.md): the goal loop end to end, with diagrams of the whole loop and of one batch, the roles, every decision point, where state lives, where a person comes in, what code enforces versus what the agents' instructions do, and how the keep-alive kit fits in.
 - **Network resume**: when the session's last turn died on a network error (DNS, connection, timeout, 5xx), the watcher sends a continue once the model API answers again. Never after auth, quota, rate-limit, policy, cancel or unrecognised errors; at most `resume.maxTries` continues per error and `resume.maxPerDay` across errors, then one notification. Configured under `resume`.
 
 ### Changed
@@ -21,6 +22,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Fixed
 
+- A trim no longer fails to restart the host when the killed host's listening socket outlives it briefly (seen on Windows): `stopHost` waits up to 30 s for the port to close, so the restart doesn't find the port "already listening" and skip the start.
+- The agent snippet now tells the agent what to do with a network-resume "Continue." message, not only a trim one.
 - The watcher lock and the host log are now per instance (`watch-<instanceName>.lock`, `host-<instanceName>.log`), so two instances sharing a state folder no longer block each other.
 
 ## [0.1.0] - 2026-11-04

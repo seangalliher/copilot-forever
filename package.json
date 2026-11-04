@@ -18,6 +18,7 @@
     "src",
     "agent",
     "templates",
+    "docs",
     "demo",
     "bootstrap.mjs",
     "copilot-forever.config.example.json",

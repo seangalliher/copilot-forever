@@ -142,6 +142,7 @@ copilot-forever uninstall --stop-host --config .goal-loop/copilot-forever.config
 
 - **The plan is not what you want:** mode A, reply in the chat; mode B, edit `GOAL.md`, delete `PLAN.md` and run the loop again. Nothing is filed before approval.
 - **A notification says "resume needed"** (mode A): open the session and send `continue from the latest handoff addendum`.
+- **The network dropped** (mode A): nothing to do. When the model API answers again, the watcher sends a continue and a notification says *Agent resumed after a network error*. After repeated failures it stops trying and a notification asks you to send `continue` yourself.
 - **An issue is parked (`goal-loop:needs-human`):** read its last comment, decide, comment your decision on the issue, remove the label, and tell the Orchestrator (mode A) or run the loop again (mode B).
 - **Mode B stopped with "stalled":** read the last entries of `.goal-loop/ralph/runs.jsonl` and the run's transcript; usually a batch waits on something only you can do.
 - **Logs:** `~/.copilot-forever/logs/` (mode A watcher and host), `.goal-loop/receipts/` (gates), `.goal-loop/ralph/` (mode B runs).

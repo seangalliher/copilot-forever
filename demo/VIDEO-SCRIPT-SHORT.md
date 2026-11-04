@@ -70,6 +70,7 @@ The time-lapse runs. When the build is finished:
 **3. It doesn't die (1 min)**
 - Quit VS Code completely. Reopen it. The session is still there and still working. "The agent never belonged to VS Code."
 - If the trim happened, show the notification or the watcher's log: "its log was trimmed and it resumed on its own." If it didn't happen during the run, one sentence on what the trim does is enough.
+- One line on network drops: "If the network drops mid-turn, the watcher waits for the API to come back and tells it to continue." If it happened during the run, show that notification.
 
 **4. Why not just a Ralph loop? (45 s)**
 - A Ralph loop reruns the agent fresh every time: simple, robust, and a good default.

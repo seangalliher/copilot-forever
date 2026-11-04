@@ -23,6 +23,8 @@ flowchart TD
   V --> O
 ```
 
+The [Orchestrator map](../../docs/orchestrator-map.md) has the full picture: one batch step by step, the roles, every decision point, where state lives and where a person comes in.
+
 ## What gets installed in your repository
 
 | File | What it is |

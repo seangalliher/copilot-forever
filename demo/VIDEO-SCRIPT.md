@@ -71,7 +71,7 @@ So there are really two parts to this project: a way of working, the agent team,
 
 ## Segment 2: how it works (2:40–5:00)
 
-**On screen:** the architecture diagram from the copilot-forever README. Zoom into each part as you name it.
+**On screen:** the [Orchestrator map](../docs/orchestrator-map.md) for the team, then the architecture diagram from the copilot-forever README for the plumbing. Zoom into each part as you name it.
 
 **Say:**
 "Here's the whole thing on one screen.
@@ -86,7 +86,7 @@ So there are really two parts to this project: a way of working, the agent team,
 
 **The plumbing: copilot-forever.**
 - The session runs on a standalone agent host, a separate process from VS Code, so closing VS Code doesn't touch it.
-- When the log gets big, the Orchestrator stops itself at a safe point. A small watcher trims the log back to its latest summary, keeping the full log in an archive, restarts the host and tells the Orchestrator to continue, all on its own."
+- When the log gets big, the Orchestrator stops itself at a safe point. A small watcher trims the log back to its latest summary, keeping the full log in an archive, restarts the host and tells the Orchestrator to continue, all on its own. The same watcher resumes it after a network drop."
 
 ---
 
@@ -141,6 +141,8 @@ So there are really two parts to this project: a way of working, the agent team,
 **Do and say:**
 1. **Quit VS Code** in the middle of a build. Wait ten seconds. Reopen it and open the session. "I just closed the whole editor, and it never stopped. The log has no gap." Show the session still working (`code agent ps` in a terminal makes it obvious).
 2. **The trim.** "I set the trim size very low for this video so you can see it." The Orchestrator reaches a safe point, writes its handoff and says it stopped for a log trim. Within ten minutes the notification appears: *Agent log trimmed and resumed (X -> Y MiB)*. (If the log hasn't compacted yet, the trim request is refused and the agent carries on; wait for the next safe point after a compaction.) Show the log size before and after, and the session picking up from its handoff.
+
+3. **Network drops.** "One more way a long run dies: the network drops mid-turn, Copilot retries for a few seconds and gives up, and the session sits idle until someone types. I lost six hours to that once. Now the watcher waits for the model API to come back and sends a continue, with caps so it can never loop." If it happened during the run, show the *Agent resumed after a network error* notification.
 
 **Capture:** the toast, the file sizes, the Orchestrator's first message after the resume.
 
