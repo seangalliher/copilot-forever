@@ -12,14 +12,26 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 
-$issues = gh issue list -R $Repo --state all --limit 500 --json number,title,state,createdAt,closedAt,labels | ConvertFrom-Json
-$prs = gh pr list -R $Repo --state all --limit 500 --json number,title,state,createdAt,mergedAt,additions,deletions,changedFiles,reviews,comments | ConvertFrom-Json
+# A GitHub API error must stop the script, never turn into a count of 0. Each call is tried 3 times.
+function Invoke-Gh([string[]]$ghArgs) {
+    for ($try = 1; $try -le 3; $try++) {
+        $out = & gh @ghArgs 2>&1
+        if ($LASTEXITCODE -eq 0) { return ($out | Where-Object { $_ -is [string] }) -join "`n" | ConvertFrom-Json }
+        Write-Warning "gh $($ghArgs[0..1] -join ' ') failed (try $try): $(($out | Select-Object -Last 1))"
+        Start-Sleep (5 * $try)
+    }
+    throw "gh $($ghArgs -join ' ') failed 3 times; no stats written"
+}
+# With -Since, let GitHub filter, so a busy repo doesn't need hundreds of heavy PR records.
+$filter = if ($Since) { @('--search', "created:>=$($Since.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ'))") } else { @() }
+$issues = Invoke-Gh (@('issue', 'list', '-R', $Repo, '--state', 'all', '--limit', '500', '--json', 'number,title,state,createdAt,closedAt') + $filter)
+$prs = Invoke-Gh (@('pr', 'list', '-R', $Repo, '--state', 'all', '--limit', '200', '--json', 'number,title,state,createdAt,mergedAt,additions,deletions,changedFiles,reviews,comments') + $filter)
 if ($Since) {
     $issues = @($issues | Where-Object { [datetime]$_.createdAt -ge $Since })
     $prs = @($prs | Where-Object { [datetime]$_.createdAt -ge $Since })
 }
 $merged = @($prs | Where-Object mergedAt)
-$runs = gh run list -R $Repo --limit 500 --json conclusion,createdAt | ConvertFrom-Json
+$runs = Invoke-Gh @('run', 'list', '-R', $Repo, '--limit', '500', '--json', 'conclusion,createdAt')
 if ($Since) { $runs = @($runs | Where-Object { [datetime]$_.createdAt -ge $Since }) }
 
 $start = if ($Since) { $Since } elseif ($issues) { ($issues | ForEach-Object { [datetime]$_.createdAt } | Measure-Object -Minimum).Minimum } else { $null }
@@ -37,7 +49,7 @@ $lines = @(
     "| Files changed (merged PRs) | $(($merged | Measure-Object changedFiles -Sum).Sum) |",
     "| PR reviews and comments | $(($prs | ForEach-Object { @($_.reviews).Count + @($_.comments).Count } | Measure-Object -Sum).Sum) |",
     "| CI runs | $($runs.Count) ($(@($runs | Where-Object conclusion -eq 'success').Count) green, $(@($runs | Where-Object conclusion -eq 'failure').Count) failed) |",
-    "| First issue to last merge | $hours hours |",
+    "| $(if ($Since) { '-Since' } else { 'First issue' }) to last merge | $hours hours |",
     "| Copilot usage | (add by hand: AI credits after minus before) |",
     '',
     'Review rounds, findings and gate runs are in the agents'' own records (the handoff file and gate receipts in the repo); add them from there.'
