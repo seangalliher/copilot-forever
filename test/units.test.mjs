@@ -181,7 +181,8 @@ test('install: Task Scheduler XML is interactive, least privilege, no overlap', 
   assert.match(x, /<RunLevel>LeastPrivilege<\/RunLevel>/);
   assert.match(x, /<MultipleInstancesPolicy>IgnoreNew<\/MultipleInstancesPolicy>/);
   assert.match(x, new RegExp(`<ExecutionTimeLimit>PT${watchTimeLimitMinutes(cfg)}M`));
-  assert.match(x, /-WindowStyle Hidden/);
+  assert.match(x, /<Command>[^<]*\\System32\\conhost\.exe<\/Command>/);
+  assert.match(x, /<Arguments>--headless &quot;[^<]*\\powershell\.exe&quot; -NoProfile [^<]*-WindowStyle Hidden/);
   assert.match(x, /&apos;watch&apos; &apos;--config&apos;/);
   const h = windowsTaskXml({ kind: 'host', cfg, node: 'node.exe', userId: 'PC\\me', startBoundary: '' });
   assert.match(h, /<LogonTrigger>.*<Delay>PT30S<\/Delay>/s);

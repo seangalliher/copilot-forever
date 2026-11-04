@@ -36,10 +36,15 @@ export function names(cfg) {
 const xml = (s) => String(s).replace(/[<>&'"]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', "'": '&apos;', '"': '&quot;' })[c]);
 const psq = (s) => `'${String(s).replace(/'/g, "''")}'`;
 
-/** Task Scheduler XML. The action runs node through a hidden Windows PowerShell window. */
+/**
+ * Task Scheduler XML. The action runs node through Windows PowerShell inside a headless console
+ * (`conhost.exe --headless`), so no window appears: `-WindowStyle Hidden` alone lets the console
+ * flash for a moment before PowerShell hides it.
+ */
 export function windowsTaskXml({ kind, cfg, node, userId, startBoundary }) {
   const sub = kind === 'host' ? ['host', 'start'] : ['watch'];
   const cmd = `& ${[node, BIN, ...sub, '--config', cfg.configFile].map(psq).join(' ')}; exit $LASTEXITCODE`;
+  const sysRoot = process.env.SystemRoot || 'C:\\Windows';
   const args = `-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -Command "${cmd.replace(/"/g, '\\"')}"`;
   const trigger = kind === 'host'
     ? `<LogonTrigger><Enabled>true</Enabled><UserId>${xml(userId)}</UserId><Delay>PT30S</Delay></LogonTrigger>`
@@ -61,7 +66,7 @@ export function windowsTaskXml({ kind, cfg, node, userId, startBoundary }) {
     <ExecutionTimeLimit>${limit}</ExecutionTimeLimit>
     <Enabled>true</Enabled>
   </Settings>
-  <Actions Context="Author"><Exec><Command>${xml(`${process.env.SystemRoot || 'C:\\Windows'}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`)}</Command><Arguments>${xml(args)}</Arguments></Exec></Actions>
+  <Actions Context="Author"><Exec><Command>${xml(`${sysRoot}\\System32\\conhost.exe`)}</Command><Arguments>${xml(`--headless "${sysRoot}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" ${args}`)}</Arguments></Exec></Actions>
 </Task>
 `;
 }

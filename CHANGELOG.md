@@ -23,6 +23,7 @@ All notable changes to this project are documented here. The format follows [Kee
 ### Fixed
 
 - A trim no longer fails to restart the host when the killed host's listening socket outlives it briefly (seen on Windows): `stopHost` waits up to 30 s for the port to close, so the restart doesn't find the port "already listening" and skip the start.
+- Windows: the scheduled tasks no longer flash a console window on every run. They now start through `conhost.exe --headless`; run `install` again to update existing tasks.
 - The agent snippet now tells the agent what to do with a network-resume "Continue." message, not only a trim one.
 - The watcher lock and the host log are now per instance (`watch-<instanceName>.lock`, `host-<instanceName>.log`), so two instances sharing a state folder no longer block each other.
 

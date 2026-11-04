@@ -158,7 +158,7 @@ copilot-forever install --config copilot-forever.config.json
 
 | OS | What `install` creates |
 |---|---|
-| Windows | Task Scheduler tasks **copilot-forever host** (at logon, after 30 s) and **copilot-forever watch** (every N minutes, no overlapping runs). Both run as you, interactive, least privilege, through a hidden Windows PowerShell window. |
+| Windows | Task Scheduler tasks **copilot-forever host** (at logon, after 30 s) and **copilot-forever watch** (every N minutes, no overlapping runs). Both run as you, interactive, least privilege, through Windows PowerShell in a headless console (no window). |
 | macOS | launchd agents `local.copilot-forever.host` (RunAtLoad, no KeepAlive) and `local.copilot-forever.watch` (StartInterval) in `~/Library/LaunchAgents`. |
 | Linux | systemd user units `copilot-forever-host.service` (enabled, `Type=simple`, runs `host start --foreground`) and `copilot-forever-watch.timer` (enabled and started). For the host to run without an open login session, run `loginctl enable-linger` yourself. |
 
@@ -246,7 +246,7 @@ Logs: `~/.copilot-forever/logs/copilot-forever.log` (the kit) and `host-<instanc
 - **The Agent Host Protocol is pre-production.** The spec is public and versioned (1.1.0 at the time of writing), but VS Code's standalone `code agent host` is new. The `code agent ps --json` output this kit reads is not a documented interface.
 - **Trims only shrink sessions that have compacted.** A session that has never completed a compaction cannot be trimmed.
 - **One session per repo folder.** If several sessions under the host work in the same folder, the largest log wins.
-- **Windows:** Task Scheduler starts node through `powershell.exe -WindowStyle Hidden`; a console window can flash for a moment.
+- **Windows:** Task Scheduler starts node through Windows PowerShell inside `conhost.exe --headless`, so no console window appears. (`-WindowStyle Hidden` alone lets a window flash on every run.) After upgrading the kit, run `install` again to update existing tasks.
 - **Linux/macOS:** desktop notifications need `notify-send` or `osascript` and a desktop session. Otherwise they appear only in the log.
 
 The goal loop adds its own:
