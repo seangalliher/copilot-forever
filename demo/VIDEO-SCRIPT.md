@@ -35,8 +35,8 @@ Why this goal: it's visual (good on camera), needs no API keys or accounts, has 
 
 - [ ] **A clean machine or a fresh Windows user account**, so the setup segment is honest. Keep this list on a second screen.
 - [ ] **Screen recorder** set to record the whole desktop at 1080p or higher, plus a separate low-frame-rate capture (one frame every 5–10 s) for the time-lapse.
-- [ ] **Lower the trim threshold for the demo** so a trim happens on camera: in `copilot-forever.config.json` set `thresholdMiB` to about `25`. Say so in the video. Put it back to `400` afterwards.
-- [ ] **Turn on notifications** (Windows: Focus off) so the "trimmed and resumed" toast is visible.
+- [ ] **Check the trim threshold for the demo.** The demo config already sets `trim.thresholdMiB` to `25` in `loopboard/.goal-loop/copilot-forever.config.json`, so a trim happens on camera. Say so in the video. Set it back to `400` in that file afterwards. A trim also needs at least one completed compaction; before that, a trim request is refused and the agent carries on.
+- [ ] **Turn on notifications** (Windows: Focus off) so the "Agent log trimmed and resumed" toast is visible.
 - [ ] **Create the empty `loopboard` repo** on GitHub only when you reach that segment. Creating it on camera is part of the story.
 - [ ] **Decide on keeping failures in.** If a gate fails or a reviewer catches a real bug, keep it: that's the strongest moment of the video.
 - [ ] **Note the start time and Copilot usage** (AI credits) so you can report time and cost at the end.
@@ -82,7 +82,7 @@ So there are really two parts to this project: a way of working, the agent team,
 - The **Diff Reviewer** reviews every change before it's committed. It runs on GPT-6.1 Sol while the Builder runs on Claude Sonnet 5.5. A different model family catches different mistakes; it's a second opinion, not the author grading its own work.
 - The **Orchestrator** runs the loop. It picks the next issues, hands them out, sends the reviewer's findings back for repair, runs the test gate once per batch, opens the PR and checks the issues really closed.
 
-**The guard rails.** I approve the plan once before any issue is filed. All work goes through pull requests, with no auto-merge on the default branch. There's a cap on how many issues it can file, and a STOP file that halts it at the next safe point.
+**The guard rails.** I approve the plan once before any issue is filed. All work goes through pull requests; nothing is pushed straight to the default branch. In this demo the Orchestrator merges its own PR only after CI is green; you can set it to wait for you to merge instead. There's a cap on how many issues it can file, and a STOP file that halts it at the next safe point.
 
 **The plumbing: copilot-forever.**
 - The session runs on a standalone agent host, a separate process from VS Code, so closing VS Code doesn't touch it.
@@ -95,9 +95,9 @@ So there are really two parts to this project: a way of working, the agent team,
 **On screen:** terminal and VS Code, real time (cut the waits).
 
 **Do and say:**
-1. "Fresh machine. I need VS Code, GitHub Copilot, Node and the GitHub CLI." Show them installed.
-2. Clone copilot-forever and run the bootstrap. "One command: it installs the keep-alive kit, starts the standalone agent host, and registers the watcher to run every 10 minutes." Show the output.
-3. Create the `loopboard` repo on GitHub and clone it. Run the template step that copies the four agents and the standing orders into it. Show `.github/agents/` in the explorer.
+1. "Fresh machine. I need Git, Node, the GitHub CLI, VS Code with GitHub Copilot, and the Copilot CLI." Show them installed.
+2. Create the `loopboard` repo on GitHub and clone it next to a clone of copilot-forever.
+3. Run the bootstrap: `node copilot-forever/bootstrap.mjs --repo loopboard --config copilot-forever/demo/goal-loop.config.json --start`. "One command: it copies the four agents and the standing orders into my repo, installs the keep-alive kit, starts the standalone agent host, and schedules the watcher every 10 minutes." Show the output, then `.github/agents/` in the explorer.
 4. "Models: Sonnet 5.5 for the Orchestrator, Architect and Builder; GPT-6.1 Sol for the reviewer." Show the `model:` lines.
 5. Add the standalone host to VS Code, as the bootstrap printed. In the Agents window, start a new session on **that** host, folder `loopboard`. "This is the one session that will run the whole build."
 
@@ -111,7 +111,7 @@ So there are really two parts to this project: a way of working, the agent team,
 
 **Do and say:**
 1. Paste the goal. "This is everything I'm going to tell it."
-2. The Architect returns a plan. Read out two or three items. "It's asking me to approve the plan before it files anything. That's the one human checkpoint I want." Approve it (or change one thing on camera, which shows you're in control).
+2. The Architect returns a plan. Read out two or three items. "It's asking me to approve the plan before it files anything. That's the one human checkpoint I want." Approve it by replying exactly `APPROVE PLAN` (other wording doesn't count, which is deliberate). Or ask for one change first, then approve: it shows you're in control.
 3. Switch to GitHub: issues appear with acceptance criteria, dependencies and labels. "That's the queue. From here on, I'm mostly watching."
 
 **Capture:** the issue list filling up; open one issue to show its acceptance criteria.
@@ -140,7 +140,7 @@ So there are really two parts to this project: a way of working, the agent team,
 
 **Do and say:**
 1. **Quit VS Code** in the middle of a build. Wait ten seconds. Reopen it and open the session. "I just closed the whole editor, and it never stopped. The log has no gap." Show the session still working (`code agent ps` in a terminal makes it obvious).
-2. **The trim.** "I set the trim size very low for this video so you can see it." The Orchestrator reaches a safe point, writes its handoff and says it stopped for a log trim. Within ten minutes the notification appears: *Orchestrator log trimmed and resumed*. Show the log size before and after, and the session picking up from its handoff.
+2. **The trim.** "I set the trim size very low for this video so you can see it." The Orchestrator reaches a safe point, writes its handoff and says it stopped for a log trim. Within ten minutes the notification appears: *Agent log trimmed and resumed (X -> Y MiB)*. (If the log hasn't compacted yet, the trim request is refused and the agent carries on; wait for the next safe point after a compaction.) Show the log size before and after, and the session picking up from its handoff.
 
 **Capture:** the toast, the file sizes, the Orchestrator's first message after the resume.
 
@@ -159,9 +159,9 @@ Here's what I wanted on top of that.
 - **Roles.** The planner plans, the builder builds, and the orchestrator decides what's next, instead of one prompt doing everything.
 - **One session I can watch and steer** in VS Code, which remembers what went wrong earlier.
 
-To be fair to Ralph: my trim is really a soft restart from the last summary, and Copilot compacts on its own every couple of hours anyway. So I built both. The same four agents run either way: as one live session with copilot-forever keeping it alive, or as a Ralph-style loop that starts a fresh orchestrator for every batch. Use Ralph mode if you want simple and robust. Use the live session if you want to watch it and steer it."
+To be fair to Ralph: my trim is really a soft restart from the last summary, and in my long sessions Copilot compacted on its own about every two and a half hours anyway. So I built both. The same four agents run either way: as one live session with copilot-forever keeping it alive, or as a Ralph-style loop that starts a fresh orchestrator for every batch. Use Ralph mode if you want simple and robust. Use the live session if you want to watch it and steer it."
 
-**Capture:** the comparison table, and `copilot-forever loop --mode ralph` (check the real command name in the README before recording) starting its first iteration on the same LoopBoard goal.
+**Capture:** the comparison table, and `copilot-forever loop --mode ralph --repo loopboard` starting its first run on the same LoopBoard goal. In Ralph mode the plan is approved with `copilot-forever loop approve-plan` after the first run; mention it in one line.
 
 ---
 
@@ -170,7 +170,7 @@ To be fair to Ralph: my trim is really a soft restart from the last summary, and
 **On screen:** the live app, then the repo's insights.
 
 **Do and say:**
-1. Open LoopBoard on its GitHub Pages URL. Add a card, drag it, move one with the keyboard, hit the WIP limit, switch to dark mode, reload and show it's still there. Open it on your phone too.
+1. Open LoopBoard on its GitHub Pages URL. (Pages has to be enabled once by you, not the agents: `gh api -X POST repos/seangalliher/loopboard/pages -f build_type=workflow`. Do it off camera before the deploy issue lands, or show it in Segment 3.) Add a card, drag it, move one with the keyboard, hit the WIP limit, switch to dark mode, reload and show it's still there. Open it on your phone too.
 2. The numbers, real ones only: "X issues, Y pull requests, Z review findings fixed, N gate runs, H hours, and this much Copilot usage."
 3. "What I did: wrote one goal, approved one plan, and checked in a few times."
 
