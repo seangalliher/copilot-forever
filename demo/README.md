@@ -132,6 +132,12 @@ npm ci && npm run dev
 
 The live board is at `https://seangalliher.github.io/loopboard/` once the Pages workflow has run on `main`.
 
+Where the time went (mode A: the one session; mode B: pass one run's session with `--session`):
+
+```bash
+copilot-forever report --config .goal-loop/copilot-forever.config.json --out timing.md
+```
+
 Mode A cleanup: put `trim.thresholdMiB` back to `400`, or remove the schedule and stop the host:
 
 ```bash

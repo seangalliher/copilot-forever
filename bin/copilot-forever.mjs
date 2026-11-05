@@ -31,6 +31,8 @@ Commands
   install / uninstall         Schedule the host and watcher (Task Scheduler / launchd / systemd)
        [--stop-host]          uninstall: also stop the running host
   snippet                     Print the agent-side instructions with your configured paths
+  report [--session <id|path>] [--out <file>] [--json]
+                              Timing report: where the session's time went, per role and per run
   goal-loop --repo <folder>   Render the goal-loop agents, gate and handoff into a repository
        [--goal-config <file>] [--no-install] [--no-effort] [--start] (same as bootstrap.mjs)
   loop --mode ralph [--repo <folder>] [--max-iterations <n>]
@@ -67,6 +69,8 @@ const { values: o, positionals } = parseArgs({
     start: { type: 'boolean', default: false },
     mode: { type: 'string' },
     'max-iterations': { type: 'string' },
+    out: { type: 'string' },
+    json: { type: 'boolean', default: false },
     help: { type: 'boolean', short: 'h', default: false },
   },
 });
@@ -105,6 +109,25 @@ async function main() {
     if (max !== undefined && !(Number.isInteger(max) && max > 0)) throw new Refusal('--max-iterations must be a positive integer', 2);
     const r = await ralph.ralphLoop({ repo, log, dryRun, maxIterations: max });
     return r.exitCode;
+  }
+
+  if (cmd === 'report') {
+    const { report } = await import('../src/report.mjs');
+    // With --session and no --config, a missing config is fine: a path needs none, and
+    // sessionFiles says what is wrong with anything else.
+    let cfgOrNull = null;
+    if (!o.session || o.config) {
+      try { cfgOrNull = loadConfig(o.config); } catch (e) {
+        if (e instanceof Refusal && /no config file found/.test(e.message)) throw new Refusal(`${e.message} Or name the session: report --session <folder or events.jsonl path>.`, 2);
+        throw e;
+      }
+    }
+    else try { cfgOrNull = loadConfig(undefined); } catch (e) { if (!(e instanceof Refusal && /no config file found/.test(e.message))) throw e; }
+    const r = await report(cfgOrNull, { session: o.session, json: o.json, out: o.out });
+    if (o.out) process.stderr.write(`report written to ${o.out}\n`);
+    else process.stdout.write(r.text);
+    if (r.unreadable) process.stderr.write(`note: ${r.unreadable} unreadable log line(s) skipped\n`);
+    return 0;
   }
 
   const cfg = loadConfig(o.config);

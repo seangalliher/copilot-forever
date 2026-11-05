@@ -52,6 +52,7 @@ Stop recording. Leave the session and the time-lapse running.
 The time-lapse runs. When the build is finished:
 - [ ] `pwsh demo/capture/timelapse.ps1 stop`, then `pwsh demo/capture/timelapse.ps1 build -Seconds 75` makes the sped-up clip.
 - [ ] `pwsh demo/capture/stats.ps1 -Repo seangalliher/loopboard` prints the numbers for take 2 and saves them to `stats.md`.
+- [ ] `copilot-forever report --config .goal-loop/copilot-forever.config.json --out timing.md` (in `loopboard`) shows where the hours went: agents, the Orchestrator, waiting for a message, and every subagent run.
 - [ ] Check how much your Copilot usage went up.
 
 ---
@@ -64,6 +65,7 @@ The time-lapse runs. When the build is finished:
 
 **2. How it got here (1½ min)**
 - Read the real numbers from `stats.md`: issues, pull requests, review rounds and findings, gate runs, hours, cost.
+- Show `timing.md`'s first table: how many hours the agents worked against the minutes it waited for a message (that row includes the watcher's continues, so check it before you say "for me"). "That's the trade: its hours, my minutes."
 - Open one PR: the description, and one finding the reviewer caught. "This is the part that used to be me."
 - If something went wrong during the run (a failed gate, a reviewer argument), say so. It's the most believable part.
 

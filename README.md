@@ -209,6 +209,7 @@ Every command accepts `--config <file>` and `--dry-run`. With `--dry-run`, every
 | `continue [--session <uri>] [--text <msg>] [--probe]` | Sends the continue message (by default to the status file's `ahp_session`). `--probe` is read-only and prints the session's and chat's state. |
 | `install` / `uninstall [--stop-host]` | Manages the OS schedule. |
 | `snippet` | Prints the agent-side instructions with your paths filled in. |
+| `report [--session <id\|path>] [--out <file>] [--json]` | Read-only timing report from the session log (and its trim archives): where the time went (subagents, Orchestrator, waiting for a message, waiting on background commands, quiet, stopped), per role and per subagent run, with effort, model and tool time, tokens and Copilot's usage figures. Without `--session` it reports on the session in the status file, else the newest session in `repoFolder`. A path needs no config; archives then come from `<COPILOT_HOME>/session-archive`. |
 
 Logs: `~/.copilot-forever/logs/copilot-forever.log` (the kit) and `host-<instanceName>.log` (the host's own output, with the token masked).
 

@@ -172,6 +172,19 @@ The runner drops a few variables of whatever started it (other tools' session va
 | `denyTools` | `gh repo delete`, `gh repo edit`, `gh secret`, `gh auth`, `git push --force` | Each passed as `--deny-tool=shell(...)`. |
 | `extraArgs` | `[]` | More `copilot` flags. |
 
+## Where the time went
+
+After a run, or during one, the timing report reads the session's own log and shows where the time went:
+
+```bash
+copilot-forever report --config .goal-loop/copilot-forever.config.json
+copilot-forever report --session <session-id or path to events.jsonl> --out timing.md
+```
+
+It puts every minute of the session in one bucket: subagents working, the Orchestrator between them, waiting for a message or an answer (from you or the watcher, so a stall the watcher ended shows here unless a background subagent was running), waiting on background commands or sleeps, quiet (5+ minutes the log does not explain, often a stall), and stopped. Then it gives per-role totals and one row per subagent run with its effort, model time, tool calls and tokens, and Copilot's usage figures. Trim archives of the session are read too, so a trimmed session reports from its start. For a session still running, the report runs up to its latest event. `--json` gives the same data for scripts.
+
+Use it before you change effort levels, batch sizes or review rounds: tune the step that took the time. In Ralph mode each run is its own session; report on them one at a time.
+
 ## What this pattern deliberately leaves out
 
 It is distilled from a loop that ran a large project for months; the parts that only made sense there are gone:
@@ -180,7 +193,7 @@ It is distilled from a loop that ran a large project for months; the parts that 
 - **Project numbering schemes, trackers and roadmaps.** GitHub issues are the only queue and the only record.
 - **Backlog accounting** (net issue reduction, discovery budgets per closure). Replaced by a single cap on discovered issues.
 - **Autonomous decision authority beyond the plan.** The loop does not make product decisions the plan does not cover; it parks and asks.
-- **Model-usage auditing from the session log, prompt-cache timing trials and token-economy measurements.** Useful at scale, but tied to an internal log format and to one project's numbers.
+- **Prompt-cache timing trials and token-economy measurements.** Useful at scale, but tied to one project's numbers. The timing report above covers the everyday question: where did the time go?
 
 ## Try it
 
