@@ -41,8 +41,15 @@ const psq = (s) => `'${String(s).replace(/'/g, "''")}'`;
  * (`conhost.exe --headless`), so no window appears: `-WindowStyle Hidden` alone lets the console
  * flash for a moment before PowerShell hides it.
  */
+/**
+ * Bumped when the installed tasks/units change in a way an old install must pick up (run
+ * `install` again). 2: the Windows host task runs `host start --direct`.
+ */
+export const SCHEDULE_VERSION = 2;
+
 export function windowsTaskXml({ kind, cfg, node, userId, startBoundary }) {
-  const sub = kind === 'host' ? ['host', 'start'] : ['watch'];
+  // --direct: the task itself is the service, so it must spawn the host, not ask the service to.
+  const sub = kind === 'host' ? ['host', 'start', '--direct'] : ['watch'];
   const cmd = `& ${[node, BIN, ...sub, '--config', cfg.configFile].map(psq).join(' ')}; exit $LASTEXITCODE`;
   const sysRoot = process.env.SystemRoot || 'C:\\Windows';
   const args = `-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -Command "${cmd.replace(/"/g, '\\"')}"`;
@@ -208,7 +215,7 @@ export async function install(cfg, log, { dryRun = false, platform = process.pla
     throw new Refusal(`unsupported platform ${platform}`, 2);
   }
   if (dryRun) log.info(`would record ${cfg.installMarker}`);
-  else writeJsonAtomic(cfg.installMarker, { ...marker, installedAt: new Date().toISOString(), configFile: cfg.configFile });
+  else writeJsonAtomic(cfg.installMarker, { ...marker, schedule: SCHEDULE_VERSION, installedAt: new Date().toISOString(), configFile: cfg.configFile });
   log.info(platform === 'win32'
     ? 'installed. The host starts 30 s after each logon; start it now with: copilot-forever host start'
     : 'installed. The host service starts at login; the watcher timer is running.');

@@ -1,18 +1,19 @@
 import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import { continueMessage, resolveConfig, validate, DEFAULTS } from '../src/config.mjs';
 import { activeRepoSessions, cleanEnv, findStandaloneHost, hostArgs, maskTokenInFile } from '../src/host.mjs';
-import { launchdPlists, systemdUnits, uninstall, watchTimeLimitMinutes, windowsTaskXml } from '../src/install.mjs';
+import { launchdPlists, SCHEDULE_VERSION, systemdUnits, uninstall, watchTimeLimitMinutes, windowsTaskXml } from '../src/install.mjs';
 import { addSecret, redact } from '../src/log.mjs';
 import { notifyCommand } from '../src/notify.mjs';
 import { descendants, isDescendant, isListening, pidAlive } from '../src/proc.mjs';
 import { checkSchema, parseEvents } from '../src/schema.mjs';
 import { findSession, lastTurnEvent, notIdleReason, workspaceCwd } from '../src/session.mjs';
 import { Refusal, uriToPath, vscodeFileUri } from '../src/util.mjs';
-import { fixtureEvents, fixtureText, logger, makeSession, rm, SID, tmpDir } from './helpers.mjs';
+import { BIN, fixtureEvents, fixtureText, freePort, logger, makeSession, rm, SID, tmpDir } from './helpers.mjs';
 
 const win = process.platform === 'win32';
 const REPO = win ? 'C:\\work\\repo' : '/work/repo';
@@ -186,7 +187,8 @@ test('install: Task Scheduler XML is interactive, least privilege, no overlap', 
   assert.match(x, /&apos;watch&apos; &apos;--config&apos;/);
   const h = windowsTaskXml({ kind: 'host', cfg, node: 'node.exe', userId: 'PC\\me', startBoundary: '' });
   assert.match(h, /<LogonTrigger>.*<Delay>PT30S<\/Delay>/s);
-  assert.match(h, /&apos;host&apos; &apos;start&apos;/);
+  // The task is the service: through the service it would trigger itself and wait out the start timeout.
+  assert.match(h, /&apos;host&apos; &apos;start&apos; &apos;--direct&apos;/);
 });
 
 test('install: systemd units run the host in the foreground and the watcher on a timer', () => {
@@ -205,6 +207,33 @@ test('install: launchd agents', () => {
   assert.match(p['local.mine.host.plist'], /<string>--foreground<\/string>/);
   assert.match(p['local.mine.host.plist'], /<key>KeepAlive<\/key><false\/>/);
   assert.match(p['local.mine.watch.plist'], /<key>StartInterval<\/key><integer>600<\/integer>/);
+});
+
+test('host start: through the installed service by default, spawned here with --direct (dry run)', async () => {
+  const dir = tmpDir('cf-direct-');
+  try {
+    const port = await freePort();
+    const cfgFile = path.join(dir, 'c.json');
+    fs.mkdirSync(path.join(dir, 'repo'));
+    fs.writeFileSync(cfgFile, JSON.stringify({ repoFolder: path.join(dir, 'repo'), stateDir: path.join(dir, 'state'), instanceName: 'cfx', host: { port } }));
+    fs.mkdirSync(path.join(dir, 'state'));
+    fs.writeFileSync(path.join(dir, 'state', 'installed-cfx.json'), JSON.stringify({ hostService: { kind: 'schtasks', name: 'cfx host' }, watch: { kind: 'schtasks', name: 'cfx watch' } }));
+    const cli = (...args) => new Promise((resolve) => {
+      execFile(process.execPath, [BIN, 'host', 'start', '--dry-run', '--config', cfgFile, ...args], { windowsHide: true },
+        (err, stdout, stderr) => resolve({ code: err ? err.code : 0, out: stdout + stderr }));
+    });
+    const viaService = await cli();
+    assert.equal(viaService.code, 0, viaService.out);
+    assert.match(viaService.out, /would start the host through schtasks cfx host/);
+    const direct = await cli('--direct');
+    assert.equal(direct.code, 0, direct.out);
+    assert.match(direct.out, /would run \(clean env/);
+    assert.doesNotMatch(direct.out, /through schtasks/);
+  } finally { rm(dir); }
+});
+
+test('install: the marker records the schedule version doctor checks', () => {
+  assert.equal(SCHEDULE_VERSION, 2);
 });
 
 // Injected stopper, port probe and lock: no schtasks call, kill or port probe happens on any OS.

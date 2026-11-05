@@ -202,7 +202,7 @@ Every command accepts `--config <file>` and `--dry-run`. With `--dry-run`, every
 |---|---|
 | `init --repo <folder>` | Writes a starter config and creates the token file. |
 | `doctor` | Read-only checks: config, the `code` CLI, Copilot versions, the token file's permissions, installation, port, host, session, log layout and whether a trim point exists. |
-| `host start [--foreground]` | Starts `code agent host --host localhost --port <port> --connection-token-file <token> --new-instance` with a clean environment, unless the port is already listening. `--foreground` supervises it (used by systemd and launchd). |
+| `host start [--foreground] [--direct]` | Starts `code agent host --host localhost --port <port> --connection-token-file <token> --new-instance` with a clean environment, unless the port is already listening. With the schedule installed (and `host.startVia` `auto`) it asks the host service to start it; `--direct` spawns it here instead, for this run only (`host.startVia: direct` does that always). The Windows host task uses `--direct`. `--foreground` supervises it (used by systemd and launchd). |
 | `host stop` / `host status` | Stops the standalone host's process tree (and with it the session's runtime) or shows it. |
 | `watch [--force]` | One watcher run, as described above. `--force` accepts an untested Copilot version; the log layout is always checked. |
 | `trim <session-id> [--copy <new-id>]` | Trims a stopped session by hand. `--copy` writes a trimmed copy under a new session id and leaves the source untouched. It refuses while a process in `inuse.<pid>.lock` is alive. |

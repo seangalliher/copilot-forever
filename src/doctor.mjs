@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { agentPs, findStandaloneHost } from './host.mjs';
-import { installedMarker } from './install.mjs';
+import { installedMarker, SCHEDULE_VERSION } from './install.mjs';
 import { isListening, processTable, run } from './proc.mjs';
 import { checkSchema, readEvents } from './schema.mjs';
 import { checkVersions, findSession, readFirstEvent } from './session.mjs';
@@ -34,7 +34,10 @@ export async function doctor(cfg, log) {
   } else warn(`token file ${cfg.host.tokenFile} missing (created on first host start)`);
 
   const marker = installedMarker(cfg);
-  marker ? pass(`installed (${marker.hostService.kind}: ${marker.hostService.name}, ${marker.watch.name})`) : warn('not installed (run `copilot-forever install`)');
+  if (!marker) warn('not installed (run `copilot-forever install`)');
+  else if ((marker.schedule ?? 1) < SCHEDULE_VERSION) {
+    warn(`installed by an older kit (schedule ${marker.schedule ?? 1}, current ${SCHEDULE_VERSION}): run \`copilot-forever install\` again${isWindows ? '; until then the host task cannot start the host at logon or after a trim' : ''}`);
+  } else pass(`installed (${marker.hostService.kind}: ${marker.hostService.name}, ${marker.watch.name})`);
 
   (await isListening(cfg.host.port)) ? pass(`port ${cfg.host.port} listening`) : warn(`port ${cfg.host.port} not listening`);
   let hostInfo = null;

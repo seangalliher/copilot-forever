@@ -131,7 +131,12 @@ function installed(cfg) {
  * - otherwise: through the installed OS service when startVia is 'auto' and `install` ran, else spawn
  *   detached with a clean environment, then wait for the port.
  */
-/** @param {any} cfg @param {any} log @param {{ dryRun?: boolean, foreground?: boolean, viaService?: boolean }} [opts] */
+/**
+ * Start the standalone host unless its port is already listening. `viaService`: true asks the
+ * installed service (scheduled task / unit) to start it; false spawns it here (the service's
+ * own run must, or it would ask itself); undefined follows host.startVia and the install marker.
+ * @param {any} cfg @param {any} log @param {{ dryRun?: boolean, foreground?: boolean, viaService?: boolean }} [opts]
+ */
 export async function startHost(cfg, log, { dryRun = false, foreground = false, viaService = undefined } = {}) {
   const port = cfg.host.port;
   if (await isListening(port)) {

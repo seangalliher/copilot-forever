@@ -21,6 +21,8 @@ Commands
   init --repo <folder>        Write ${CONFIG_NAME} (here, or at --config) and create the token file
   doctor                      Check config, tools, versions, host, session and log layout (read-only)
   host start [--foreground]   Start the standalone agent host on localhost:<port> (no-op if listening)
+       [--direct]             ... spawn it here even when the host service is installed
+                              (--foreground always spawns it, so --direct adds nothing there)
   host stop                   Stop the standalone host (stops the agent session's runtime too)
   host status                 Show the host and the session it runs
   watch                       One watcher run: status file, and a trim if the agent requested one
@@ -54,6 +56,7 @@ const { values: o, positionals } = parseArgs({
     'dry-run': { type: 'boolean', default: false },
     force: { type: 'boolean', default: false },
     foreground: { type: 'boolean', default: false },
+    direct: { type: 'boolean', default: false },
     repo: { type: 'string' },
     copy: { type: 'string' },
     session: { type: 'string' },
@@ -140,7 +143,7 @@ async function main() {
     }
     case 'host': {
       const h = await import('../src/host.mjs');
-      if (sub === 'start') return (await h.startHost(cfg, log, { dryRun, foreground: o.foreground })) ? 0 : 1;
+      if (sub === 'start') return (await h.startHost(cfg, log, { dryRun, foreground: o.foreground, viaService: o.direct ? false : undefined })) ? 0 : 1;
       if (sub === 'stop' || sub === 'status') {
         const r = await h.stopStandaloneHost(cfg, log, { dryRun, statusOnly: sub === 'status' });
         if (r === null) return sub === 'status' ? 1 : 0;
