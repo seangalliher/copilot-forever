@@ -7,7 +7,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { resolveGoalLoopConfig } from './goal-loop.mjs';
+import { agentFileName, agentNames, resolveGoalLoopConfig } from './goal-loop.mjs';
 import { killTree, run, winWrap } from './proc.mjs';
 import { exists, nowIso, Refusal, sleep, stampUtc } from './util.mjs';
 
@@ -134,15 +134,29 @@ If a batch from an earlier run is half done (see the handoff), finish that one i
   return head + body + tail;
 }
 
-/** The copilot command line for one run (pinned agent and model). */
-export function copilotArgs(cfg, { promptRel, usageFile, shareFile }) {
+/**
+ * The Orchestrator's agent name for --agent: ralph.agent when set, else the name in the repo's
+ * orchestrator.agent.md (an older name stays valid until the agents are re-rendered), else the
+ * configured name.
+ */
+export function orchestratorAgent(cfg, repo) {
+  return cfg.ralph.agent || (repo && agentFileName(path.join(repo, '.github', 'agents', 'orchestrator.agent.md'))) || agentNames(cfg).orchestrator;
+}
+
+/**
+ * The copilot command line for one run (pinned agent and model).
+ * @param {any} cfg
+ * @param {{ promptRel: string, usageFile: string, shareFile: string, repo?: string }} o
+ */
+export function copilotArgs(cfg, { promptRel, usageFile, shareFile, repo }) {
   const r = cfg.ralph;
   const prompt = `Ralph mode: read ${promptRel} and follow it exactly.`;
   if (/["%^&|<>\r\n]/.test(prompt)) throw new Error('internal: the -p prompt must stay free of shell metacharacters');
   return [
     '-p', prompt,
-    '--agent', r.agent,
+    '--agent', orchestratorAgent(cfg, repo),
     '--model', cfg.models.orchestrator,
+    ...(cfg.effort.orchestrator !== 'inherit' ? ['--reasoning-effort', cfg.effort.orchestrator] : []),
     '--allow-all-tools',
     '--no-ask-user',
     '--no-auto-update',
@@ -215,7 +229,7 @@ export async function ralphLoop(o) {
       usage: path.join(p.dir, `${base}.usage.json`),
       share: path.join(p.dir, `${base}.transcript.md`),
     };
-    const args = copilotArgs(cfg, { promptRel, usageFile: files.usage, shareFile: files.share });
+    const args = copilotArgs(cfg, { promptRel, usageFile: files.usage, shareFile: files.share, repo });
     const shown = [...cfg.ralph.copilotCommand, ...args].map((a) => (/\s/.test(a) ? `"${a}"` : a)).join(' ');
     if (dryRun) {
       log.info(`run ${iteration}: phase ${next.phase}${next.open ? ` (${next.open} workable issues)` : ''}`);

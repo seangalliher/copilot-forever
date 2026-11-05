@@ -1,5 +1,5 @@
 ---
-name: "Builder"
+name: "{{names.builder}}"
 description: "Implements exactly one issue or build prompt, with focused tests. Makes no architectural decisions."
 model: "{{models.builder}}"
 tools: [read, search, edit, execute]

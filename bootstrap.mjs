@@ -6,7 +6,7 @@
 // Installs copilot-forever (npm ci, npm link), renders the goal-loop agents, standing orders, gate
 // script and handoff template into <your repo>, writes its copilot-forever config, checks the tools
 // the loop needs, and prints the remaining manual steps. Changes nothing outside the kit and <your repo>
-// except the global `npm link`. Options:
+// except the global `npm link` and the subagents' effort entries in Copilot's settings.json. Options:
 //   --config <file>        goal-loop config (default: the repo's .goal-loop/config.json, else the example)
 //   --dry-run              show what it would do; write nothing
 //   --force                overwrite files bootstrap wrote before (GOAL.md is never overwritten)
@@ -14,6 +14,8 @@
 //   --no-link              skip npm link only
 //   --start                also install the watcher schedule and start the standalone host (persistent mode)
 //   --allow-same-family    allow the reviewer on the builder's model family (not recommended)
+//   --no-effort            leave Copilot's user settings alone (by default the subagents' reasoning
+//                          effort from the config is written to ~/.copilot/settings.json)
 import { parseArgs } from 'node:util';
 
 if (Number(process.versions.node.split('.')[0]) < 22) {
@@ -33,13 +35,14 @@ const { values: o } = parseArgs({
     'no-install': { type: 'boolean', default: false },
     'no-link': { type: 'boolean', default: false },
     'allow-same-family': { type: 'boolean', default: false },
+    'no-effort': { type: 'boolean', default: false },
     start: { type: 'boolean', default: false },
     help: { type: 'boolean', short: 'h', default: false },
   },
 });
 
 if (o.help || !o.repo) {
-  console.log('usage: node bootstrap.mjs --repo <target repo> [--config <file>] [--dry-run] [--force] [--no-install] [--no-link] [--start]');
+  console.log('usage: node bootstrap.mjs --repo <target repo> [--config <file>] [--dry-run] [--force] [--no-install] [--no-link] [--no-effort] [--start]');
   process.exit(o.help ? 0 : 2);
 }
 
@@ -47,7 +50,7 @@ const log = new Logger({ dryRun: o['dry-run'], prefix: 'bootstrap: ' });
 try {
   await bootstrap({
     repo: o.repo, config: o.config, dryRun: o['dry-run'], force: o.force,
-    install: !o['no-install'], link: !o['no-link'], allowSameFamily: o['allow-same-family'], start: o.start, log,
+    install: !o['no-install'], link: !o['no-link'], allowSameFamily: o['allow-same-family'], effort: !o['no-effort'], start: o.start, log,
   });
 } catch (e) {
   console.error(`bootstrap: ${e instanceof Refusal ? '' : 'error: '}${e.message}`);

@@ -73,7 +73,7 @@ Recommended: turn on branch protection for `main` (require a pull request and pa
 
 **A1. Connect VS Code.** Add the standalone host to the `chat.remoteAgentHosts` user setting with address `localhost:47811` and the token from `~/.copilot-forever/token.txt`, as the bootstrap printed. Reload the window. To check the host: `copilot-forever host status --config .goal-loop/copilot-forever.config.json`.
 
-**A2. Start the loop.** In the Agents window, start a new session on **that** host (not VS Code's built-in one), choose the `loopboard` folder and the **Orchestrator** agent, and send:
+**A2. Start the loop.** In the Agents window, start a new session on **that** host (not VS Code's built-in one), choose the `loopboard` folder and the **Goal Orchestrator** agent, set the effort in the model picker to **High**, and send:
 
 ```text
 start

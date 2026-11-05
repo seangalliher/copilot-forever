@@ -32,7 +32,7 @@ Commands
        [--stop-host]          uninstall: also stop the running host
   snippet                     Print the agent-side instructions with your configured paths
   goal-loop --repo <folder>   Render the goal-loop agents, gate and handoff into a repository
-       [--goal-config <file>] [--no-install] [--start] (same as bootstrap.mjs)
+       [--goal-config <file>] [--no-install] [--no-effort] [--start] (same as bootstrap.mjs)
   loop --mode ralph [--repo <folder>] [--max-iterations <n>]
                               Run the goal loop as fresh copilot -p Orchestrator runs (Ralph mode)
   loop approve-plan [--repo <folder>]
@@ -61,6 +61,7 @@ const { values: o, positionals } = parseArgs({
     timeout: { type: 'string' },
     'goal-config': { type: 'string' },
     'no-install': { type: 'boolean', default: false },
+    'no-effort': { type: 'boolean', default: false },
     'no-link': { type: 'boolean', default: false },
     'allow-same-family': { type: 'boolean', default: false },
     start: { type: 'boolean', default: false },
@@ -81,10 +82,10 @@ async function main() {
   }
   if (cmd === 'init') return init();
   if (cmd === 'goal-loop') {
-    if (!o.repo) throw new Refusal('usage: copilot-forever goal-loop --repo <folder> [--goal-config <file>] [--dry-run] [--force] [--no-install]', 2);
+    if (!o.repo) throw new Refusal('usage: copilot-forever goal-loop --repo <folder> [--goal-config <file>] [--dry-run] [--force] [--no-install] [--no-effort]', 2);
     const { bootstrap } = await import('../src/goal-loop.mjs');
     await bootstrap({ repo: o.repo, config: o['goal-config'], dryRun, force: o.force, install: !o['no-install'], link: !o['no-link'],
-      allowSameFamily: o['allow-same-family'], start: o.start, log: new Logger({ dryRun, prefix: 'goal-loop: ' }) });
+      allowSameFamily: o['allow-same-family'], effort: !o['no-effort'], start: o.start, log: new Logger({ dryRun, prefix: 'goal-loop: ' }) });
     return 0;
   }
   if (cmd === 'loop') {

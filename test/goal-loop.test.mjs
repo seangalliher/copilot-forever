@@ -4,10 +4,15 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
 import { resolveConfig } from '../src/config.mjs';
-import { bootstrap, modelFamily, plannedFiles, render, resolveGoalLoopConfig, TEMPLATES } from '../src/goal-loop.mjs';
+import { orchestratorAgent } from '../src/ralph.mjs';
+import { agentFileName, agentNames, applyEffortSettings, bootstrap, modelFamily, plannedFiles, render, resolveGoalLoopConfig, TEMPLATES } from '../src/goal-loop.mjs';
 import { ROOT, logger, rm, tmpDir } from './helpers.mjs';
 
 const GATE = path.join(TEMPLATES, 'gate.mjs');
+// The bootstrap writes the subagents' effort into Copilot's user settings: keep the tests away
+// from the real ~/.copilot.
+process.env.COPILOT_HOME = tmpDir('cf-copilot-home-');
+process.on('exit', () => fs.rmSync(process.env.COPILOT_HOME, { recursive: true, force: true }));
 
 function gitRepo() {
   const d = tmpDir('cf-gl-');
@@ -157,7 +162,10 @@ test('templates: every placeholder renders and frontmatter carries the configure
   const files = plannedFiles(cfg, '/tmp/my-app');
   for (const f of files) assert.ok(!/\{\{/.test(f.content), `${f.rel} has an unrendered placeholder`);
   const byName = Object.fromEntries(files.map((f) => [f.rel, f.content]));
-  assert.match(byName['.github/agents/orchestrator.agent.md'], /^---\nname: "Orchestrator"\n[\s\S]*model: "orch-y"/);
+  assert.match(byName['.github/agents/orchestrator.agent.md'], /^---\nname: "Goal Orchestrator"\n[\s\S]*model: "orch-y"/);
+  assert.match(byName['.github/agents/builder.agent.md'], /^---\nname: "Goal Builder"\n/);
+  assert.match(byName['.github/agents/diff-reviewer.agent.md'], /^---\nname: "Goal Diff Reviewer"\n/);
+  assert.match(byName['.github/agents/orchestrator.agent.md'], /Builder is `Goal Builder`/, 'the Orchestrator delegates by the prefixed names');
   assert.match(byName['.github/agents/builder.agent.md'], /model: "builder-model-x"/);
   assert.match(byName['.github/agents/diff-reviewer.agent.md'], /model: "gpt-review"/);
   assert.match(byName['.github/agents/architect.agent.md'], /model: "arch-z"/);
@@ -171,6 +179,85 @@ test('templates: every placeholder renders and frontmatter carries the configure
   assert.match(byName['.github/agents/builder.agent.md'], /make the claim smaller or delete it/, 'repairs shrink claims');
   assert.ok(!/tools:/.test(orch.split('---')[1]), 'orchestrator keeps all tools (it delegates)');
   assert.ok(!/\bedit\b/.test(byName['.github/agents/diff-reviewer.agent.md'].split('---')[1]), 'reviewer cannot edit');
+});
+
+test('agents: the name prefix and effort levels are validated; an empty prefix gives plain names', () => {
+  assert.deepEqual(agentNames(resolveGoalLoopConfig({})), { orchestrator: 'Goal Orchestrator', architect: 'Goal Architect', builder: 'Goal Builder', reviewer: 'Goal Diff Reviewer' });
+  assert.equal(agentNames(resolveGoalLoopConfig({ agents: { namePrefix: '' } })).builder, 'Builder');
+  assert.throws(() => resolveGoalLoopConfig({ effort: { builder: 'extreme' } }), /effort\.builder must be one of/);
+  assert.throws(() => resolveGoalLoopConfig({ agents: { namePrefix: 'a"b' } }), /agents\.namePrefix/);
+  assert.equal(resolveGoalLoopConfig({ effort: { reviewer: 'inherit' } }).effort.reviewer, 'inherit');
+});
+
+test('effort: written to Copilot settings for the subagents only, keeping other settings and agents', () => {
+  const d = tmpDir('cf-effort-');
+  const file = path.join(d, 'settings.json');
+  try {
+    fs.writeFileSync(file, '// comment line\n{ "logLevel": "all", "subagents": { "agents": { "Builder": { "effortLevel": "max" } } } }\n');
+    const cfg = resolveGoalLoopConfig({ effort: { builder: 'medium' } });
+    assert.ok(applyEffortSettings(cfg, logger(), { file }).changed);
+    const s = JSON.parse(fs.readFileSync(file, 'utf8'));
+    assert.equal(s.logLevel, 'all');
+    assert.equal(s.subagents.agents.Builder.effortLevel, 'max', 'an agent the kit does not own is untouched');
+    assert.equal(s.subagents.agents['Goal Builder'].effortLevel, 'medium');
+    assert.equal(s.subagents.agents['Goal Architect'].effortLevel, 'max');
+    assert.equal(s.subagents.agents['Goal Diff Reviewer'].effortLevel, 'max');
+    assert.ok(!('Goal Orchestrator' in s.subagents.agents), 'the main session is set in the picker, not here');
+    assert.match(fs.readFileSync(`${file}.bak-copilot-forever`, 'utf8'), /comment line/, 'previous file kept');
+    assert.equal(applyEffortSettings(cfg, logger(), { file }).changed, false, 'a rerun changes nothing');
+    applyEffortSettings(resolveGoalLoopConfig({ effort: { builder: 'low' } }), logger(), { file });
+    assert.match(fs.readFileSync(`${file}.bak-copilot-forever`, 'utf8'), /comment line/, 'a second change keeps the original backup');
+    applyEffortSettings(resolveGoalLoopConfig({ effort: { builder: 'inherit' } }), logger(), { file });
+    assert.ok(!('Goal Builder' in JSON.parse(fs.readFileSync(file, 'utf8')).subagents.agents), 'inherit removes the entry');
+    const before = fs.readFileSync(file, 'utf8');
+    applyEffortSettings(resolveGoalLoopConfig({ effort: { builder: 'low' } }), logger(), { file, dryRun: true });
+    assert.equal(fs.readFileSync(file, 'utf8'), before, 'dry run writes nothing');
+    fs.writeFileSync(file, '{ not json');
+    assert.equal(applyEffortSettings(cfg, logger(), { file }).changed, false, 'an unreadable file is left alone');
+    assert.equal(fs.readFileSync(file, 'utf8'), '{ not json');
+    for (const odd of ['{ "subagents": "oops" }', '{ "subagents": { "agents": [] } }']) {
+      fs.writeFileSync(file, odd);
+      assert.equal(applyEffortSettings(cfg, logger(), { file }).changed, false, `left alone: ${odd}`);
+      assert.equal(fs.readFileSync(file, 'utf8'), odd);
+    }
+  } finally { rm(d); }
+});
+
+test('upgrade: a config from before the name prefix, and agent files kept with the old names', async () => {
+  const { d } = gitRepo();
+  const home = process.env.COPILOT_HOME;
+  const settings = path.join(home, 'settings.json');
+  try {
+    // The old default ralph.agent is dropped, so Ralph mode asks for the agent that is rendered.
+    const old = resolveGoalLoopConfig({ ralph: { agent: 'Orchestrator' } });
+    assert.equal(old.ralph.agent, null);
+    assert.equal(resolveGoalLoopConfig({ ralph: { agent: 'My Orchestrator' } }).ralph.agent, 'My Orchestrator', 'a name set on purpose is kept');
+    // An agent file kept with its old name (rerun without --force) gets no effort entry, and a warning.
+    await bootstrap({ repo: d, install: false, print: false, log: logger() });
+    const builder = path.join(d, '.github', 'agents', 'builder.agent.md');
+    fs.writeFileSync(builder, fs.readFileSync(builder, 'utf8').replace('name: "Goal Builder"', 'name: "Builder"'));
+    fs.rmSync(settings, { force: true });
+    const log = logger();
+    await bootstrap({ repo: d, install: false, print: false, log });
+    const agents = JSON.parse(fs.readFileSync(settings, 'utf8')).subagents.agents;
+    assert.ok(!('Goal Builder' in agents) && !('Builder' in agents), 'no setting for a name the repo does not have');
+    assert.equal(agents['Goal Architect'].effortLevel, 'max');
+    assert.ok(log.lines.some((l) => /builder\.agent\.md is named "Builder", not "Goal Builder".*--force/.test(l)), log.lines.join('\n'));
+    // Ralph asks for the Orchestrator by the name its file has: the new name after a render,
+    // the old one while an older file is kept (a rerun without --force).
+    const orch = path.join(d, '.github', 'agents', 'orchestrator.agent.md');
+    assert.equal(orchestratorAgent(old, d), 'Goal Orchestrator');
+    fs.writeFileSync(orch, fs.readFileSync(orch, 'utf8').replace('name: "Goal Orchestrator"', 'name: "Orchestrator"').replace(/\n/g, '\r\n'));
+    assert.equal(orchestratorAgent(old, d), 'Orchestrator', 'kept file, CRLF line endings');
+    fs.writeFileSync(orch, '\uFEFF' + fs.readFileSync(orch, 'utf8'));
+    assert.equal(orchestratorAgent(old, d), 'Orchestrator', 'kept file saved with a byte-order mark');
+    assert.equal(orchestratorAgent(resolveGoalLoopConfig({ ralph: { agent: 'My Orchestrator' } }), d), 'My Orchestrator');
+    assert.equal(orchestratorAgent(old, path.join(d, 'nowhere')), 'Goal Orchestrator', 'no file: the configured name');
+    // Only the frontmatter counts.
+    const body = path.join(d, 'body-only.agent.md');
+    fs.writeFileSync(body, '---\ndescription: "x"\n---\nname: "Goal Builder"\n');
+    assert.equal(agentFileName(body), null);
+  } finally { rm(d); fs.rmSync(settings, { force: true }); }
 });
 
 // ---- bootstrap ------------------------------------------------------------------------------

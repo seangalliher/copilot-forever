@@ -58,7 +58,7 @@ Bootstrap checks the tools, runs `npm ci` and `npm link` in the kit, writes the 
 3. Commit the scaffolding yourself.
 4. Start the keep-alive layer: `copilot-forever doctor`, `install`, `host start`, each with `--config .goal-loop/copilot-forever.config.json`.
 5. Add the standalone host to VS Code's `chat.remoteAgentHosts` setting (address `localhost:<port>`, token from `~/.copilot-forever/token.txt`).
-6. In the Agents window, start a session on that host with the **Orchestrator** agent and send `start` (or paste the goal).
+6. In the Agents window, start a session on that host with the **Goal Orchestrator** agent, set the effort in the chat's model picker to `effort.orchestrator` (High by default), and send `start` (or paste the goal).
 7. Reply `APPROVE PLAN` when the plan is right.
 
 Steps 4 to 7 are the persistent session. `bootstrap.mjs --start` does step 4 for you (it schedules the watcher and starts the host). For [Ralph mode](#ralph-mode), skip steps 4 to 7 and run `copilot-forever loop --mode ralph` instead.
@@ -71,6 +71,9 @@ Preview everything first with `--dry-run`, which writes nothing. The same bootst
 |---|---|---|
 | `models.orchestrator` / `architect` / `builder` | `claude-sonnet-5.5` (all three) | Written into each agent's `model:` line and passed explicitly on every delegation. |
 | `models.reviewer` / `reviewerFallback` | `gpt-6.1-sol` / `gpt-6-luna` | Must be a different model family from the builder; bootstrap refuses otherwise (`--allow-same-family` overrides, not recommended). |
+| `effort.orchestrator` | `high` | The Orchestrator is the main session: set this level in the chat's model picker (persistent mode); Ralph mode passes it as `--reasoning-effort`. |
+| `effort.architect` / `builder` / `reviewer` | `max` / `high` / `max` | Reasoning effort per subagent. The bootstrap writes them to Copilot's user settings (`~/.copilot/settings.json`, `subagents.agents.<agent name>.effortLevel`), touching only the kit's own agent names and keeping your file as it was before the first change as `settings.json.bak-copilot-forever`. An agent file kept with an older name (a rerun without `--force`) gets no entry and a warning. `--no-effort` (on `bootstrap.mjs` and `copilot-forever goal-loop`) skips this; `/subagents` changes it by hand. Levels: `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, or `inherit` (the parent session's). Max where judgement is the product (the plan, the review), High where the spec and the review carry the quality (building, coordinating). |
+| `agents.namePrefix` | `Goal ` | Prefix for the agents' names: Goal Orchestrator, Goal Architect, Goal Builder, Goal Diff Reviewer. Copilot keys the effort settings by agent name for the whole user, so the prefix keeps them apart from agents of the same name in your other repositories. |
 | `gate.command` | `npm test` | Your repository's full test command. |
 | `gate.timeoutMinutes` | `30` | The gate fails when the command runs longer. |
 | `tests.focused` | `npm test -- <test file>` | How the Builder runs focused tests; shown in briefs. |
@@ -134,7 +137,7 @@ The runner stops when the STOP file exists, when the queue is done, at `ralph.ma
 
 ```text
 copilot -p "Ralph mode: read .goal-loop/ralph/run-003-batch-<time>.prompt.md and follow it exactly."
-        --agent Orchestrator --model <models.orchestrator>
+        --agent "Goal Orchestrator" --model <models.orchestrator> --reasoning-effort <effort.orchestrator>
         --allow-all-tools --no-ask-user --no-auto-update
         --deny-tool=<each ralph.denyTools entry>  [--deny-tool=shell(gh pr merge) when mergePolicy is human]
         [--max-ai-credits <ralph.maxAiCreditsPerRun>]
@@ -160,14 +163,14 @@ The runner drops a few variables of whatever started it (other tools' session va
 | Key (`ralph.…`) | Default | Meaning |
 |---|---|---|
 | `copilotCommand` / `ghCommand` | `copilot` / `gh` | The CLIs, as a command name or `[executable, ...args]`. |
-| `agent` | `Orchestrator` | The `--agent` value: the agent's `name:`. |
+| `agent` | the Orchestrator's name (`Goal Orchestrator`) | The `--agent` value; leave it out unless you renamed the agent by hand. |
 | `maxIterations` | `12` | Runs per invocation of the loop. |
 | `stallLimit` | `3` | Consecutive runs without progress before the loop stops. |
 | `iterationTimeoutMinutes` | `120` | A run that takes longer is stopped. |
 | `pauseSeconds` | `30` | Pause between runs. |
 | `maxAiCreditsPerRun` | `0` (no limit) | Passed as `--max-ai-credits` (the CLI minimum is 30). |
 | `denyTools` | `gh repo delete`, `gh repo edit`, `gh secret`, `gh auth`, `git push --force` | Each passed as `--deny-tool=shell(...)`. |
-| `extraArgs` | `[]` | More `copilot` flags, for example `["--reasoning-effort", "high"]`. |
+| `extraArgs` | `[]` | More `copilot` flags. |
 
 ## What this pattern deliberately leaves out
 

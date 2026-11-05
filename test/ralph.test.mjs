@@ -59,8 +59,9 @@ test('ralph: plan, human approval, file issues, one batch per run until the queu
 
     const call = st().calls[2].args;
     const at = (f) => call[call.indexOf(f) + 1];
-    assert.equal(at('--agent'), 'Orchestrator');
+    assert.equal(at('--agent'), 'Goal Orchestrator');
     assert.equal(at('--model'), 'claude-sonnet-5.5');
+    assert.equal(at('--reasoning-effort'), 'high');
     for (const f of ['--allow-all-tools', '--no-ask-user', '--no-auto-update', '--deny-tool=shell(gh pr merge)', '--deny-tool=shell(gh repo delete)']) assert.ok(call.includes(f), f);
     assert.match(at('-p'), /^Ralph mode: read \.goal-loop\/ralph\/run-\d{3}-batch-\S+\.prompt\.md and follow it exactly\.$/);
     assert.ok(st().calls.every((c) => !c.envHasClaudeCode));
@@ -143,7 +144,7 @@ test('ralph: --dry-run writes nothing and runs nothing', () => {
     const r = spawnSync(process.execPath, [BIN, 'loop', '--mode', 'ralph', '--repo', repo, '--dry-run'], { encoding: 'utf8' });
     assert.equal(r.status, 0, r.stderr);
     assert.match(r.stdout, /run 1: phase batch \(1 workable issues\)/);
-    assert.match(r.stdout, /would run \(in .*\): .*fake-copilot\.mjs .*-p "Ralph mode: read .*--agent Orchestrator --model claude-sonnet-5\.5 --allow-all-tools/);
+    assert.match(r.stdout, /would run \(in .*\): .*fake-copilot\.mjs .*-p "Ralph mode: read .*--agent "Goal Orchestrator" --model claude-sonnet-5\.5 --reasoning-effort high --allow-all-tools/);
     assert.ok(!fs.existsSync(path.join(repo, '.goal-loop', 'ralph')), 'no run folder');
     assert.equal(st().calls, undefined, 'copilot not called');
   } finally { rm(repo); }

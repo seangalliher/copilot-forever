@@ -6,6 +6,15 @@
     "reviewer": "gpt-6.1-sol",
     "reviewerFallback": "gpt-6-luna"
   },
+  "effort": {
+    "orchestrator": "high",
+    "architect": "max",
+    "builder": "high",
+    "reviewer": "max"
+  },
+  "agents": {
+    "namePrefix": "Goal "
+  },
   "gate": {
     "command": "npm test",
     "timeoutMinutes": 30
@@ -36,7 +45,6 @@
   "ralph": {
     "copilotCommand": "copilot",
     "ghCommand": "gh",
-    "agent": "Orchestrator",
     "maxIterations": 12,
     "stallLimit": 3,
     "iterationTimeoutMinutes": 120,

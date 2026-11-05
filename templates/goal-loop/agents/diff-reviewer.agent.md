@@ -1,5 +1,5 @@
 ---
-name: "Diff Reviewer"
+name: "{{names.reviewer}}"
 description: "Adversarial pre-commit review of a staged diff, on a different model family from the author. Verifies that the next consumer accepts the change, not that the change does what its author intended."
 model: "{{models.reviewer}}"
 tools: [read, search, execute, web]

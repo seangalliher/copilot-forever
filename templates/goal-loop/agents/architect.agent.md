@@ -1,5 +1,5 @@
 ---
-name: "Architect"
+name: "{{names.architect}}"
 description: "Goal intake and design: turns a goal into a short plan and GitHub issues with acceptance criteria and dependencies, writes verify-first build prompts, and triages build or test failures."
 model: "{{models.architect}}"
 tools: [read, search, edit, execute, web]

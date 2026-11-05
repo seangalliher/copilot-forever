@@ -1,6 +1,7 @@
 // goal-loop bootstrap: render templates/goal-loop into a target repository and set up
 // copilot-forever for it. Used by bootstrap.mjs and `copilot-forever goal-loop`.
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { run } from './proc.mjs';
@@ -10,6 +11,16 @@ export const KIT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)
 export const TEMPLATES = path.join(KIT_ROOT, 'templates', 'goal-loop');
 const EXAMPLE = path.join(TEMPLATES, 'goal-loop.config.example.json');
 export const MERGE_POLICIES = ['human', 'agent-after-green'];
+/** Reasoning effort levels Copilot accepts, plus 'inherit' (use the parent session's). */
+export const EFFORT_LEVELS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'inherit'];
+export const ROLES = ['orchestrator', 'architect', 'builder', 'reviewer'];
+const ROLE_TITLES = { orchestrator: 'Orchestrator', architect: 'Architect', builder: 'Builder', reviewer: 'Diff Reviewer' };
+
+/** The agents' display names: the prefix plus the role, e.g. "Goal Builder". */
+export function agentNames(cfg) {
+  const prefix = cfg.agents?.namePrefix ?? '';
+  return Object.fromEntries(ROLES.map((r) => [r, `${prefix}${ROLE_TITLES[r]}`]));
+}
 
 /** Model family from a model id: the vendor whose models share blind spots. */
 export function modelFamily(id) {
@@ -46,6 +57,11 @@ export function resolveGoalLoopConfig(raw = {}, { allowSameFamily = false } = {}
   if (cfg.models.reviewerFallback && !allowSameFamily && modelFamily(cfg.models.reviewerFallback) === modelFamily(cfg.models.builder)) {
     p.push(`models.reviewerFallback (${cfg.models.reviewerFallback}) is the same model family as models.builder`);
   }
+  for (const role of ROLES) {
+    if (!EFFORT_LEVELS.includes(cfg.effort?.[role])) p.push(`effort.${role} must be one of ${EFFORT_LEVELS.join(', ')}`);
+  }
+  const prefix = cfg.agents?.namePrefix;
+  if (typeof prefix !== 'string' || !/^[A-Za-z0-9 ._-]{0,30}$/.test(prefix)) p.push('agents.namePrefix must be up to 30 letters, digits, spaces, dots, dashes or underscores (it can be empty)');
   if (typeof cfg.gate.command !== 'string' || !cfg.gate.command.trim()) p.push('gate.command must be the repository\'s full test command');
   for (const [k, v] of Object.entries(cfg.caps)) if (!Number.isInteger(v) || v < 1) p.push(`caps.${k} must be a positive integer`);
   if (cfg.caps.maxBatchSize > 3) p.push('caps.maxBatchSize must be 3 or less');
@@ -58,7 +74,9 @@ export function resolveGoalLoopConfig(raw = {}, { allowSameFamily = false } = {}
     if (typeof r[k] === 'string') r[k] = [r[k]];
     if (!Array.isArray(r[k]) || !r[k].length || !r[k].every((x) => typeof x === 'string' && x)) p.push(`ralph.${k} must be a command name or an array of strings`);
   }
-  if (typeof r.agent !== 'string' || !r.agent) p.push("ralph.agent must be the Orchestrator agent's name");
+  // 'Orchestrator' was the default before the agents had a name prefix: derive the name instead.
+  if (r.agent === 'Orchestrator') r.agent = null;
+  if (r.agent !== null && r.agent !== undefined && (typeof r.agent !== 'string' || !r.agent)) p.push("ralph.agent must be the Orchestrator agent's name, or left out");
   for (const k of ['maxIterations', 'stallLimit', 'iterationTimeoutMinutes']) if (!Number.isInteger(r[k]) || r[k] < 1) p.push(`ralph.${k} must be a positive integer`);
   for (const k of ['pauseSeconds', 'maxAiCreditsPerRun']) if (!Number.isInteger(r[k]) || r[k] < 0) p.push(`ralph.${k} must be a non-negative integer`);
   if (r.maxAiCreditsPerRun && r.maxAiCreditsPerRun < 30) p.push('ralph.maxAiCreditsPerRun must be 0 (no limit) or at least 30 (the Copilot CLI minimum)');
@@ -125,7 +143,7 @@ ralph/
  * @returns {Array<{ rel: string, content: string, alt?: string, note?: string, keep?: boolean, ownMarker?: string }>}
  */
 export function plannedFiles(cfg, repo) {
-  const vars = { ...cfg, labels: cfg.github.labels, safePointSnippet: safePointSnippet() };
+  const vars = { ...cfg, labels: cfg.github.labels, names: agentNames(cfg), safePointSnippet: safePointSnippet() };
   const t = (p) => fs.readFileSync(path.join(TEMPLATES, p), 'utf8');
   return [
     { rel: '.github/agents/orchestrator.agent.md', content: render(t('agents/orchestrator.agent.md'), vars) },
@@ -199,7 +217,95 @@ export async function checkPrerequisites(log) {
   return missing;
 }
 
+const AGENT_FILES = { architect: 'architect', builder: 'builder', reviewer: 'diff-reviewer' };
+
+/** The `name:` in an agent file's frontmatter, or null (no file, no frontmatter, or no name). */
+export function agentFileName(file) {
+  let text;
+  try { text = fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''); } catch { return null; }
+  const fm = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(text);
+  return fm ? (/^name:[ \t]*"?([^"\r\n]*?)"?[ \t]*$/m.exec(fm[1])?.[1] || null) : null;
+}
+
+/**
+ * The subagent roles whose agent file in the repo carries the configured name after writeFiles.
+ * Copilot keys the effort setting by name, so an agent file kept with an older name (a rerun
+ * without --force) would not pick up the setting: warn instead of writing it.
+ */
+export function effortRoles(repo, cfg, results, log) {
+  const names = agentNames(cfg);
+  const roles = [];
+  for (const [role, base] of Object.entries(AGENT_FILES)) {
+    const rel = `.github/agents/${base}.agent.md`;
+    const action = results.find((r) => r.rel === rel)?.action;
+    const written = action === 'create' || action === 'overwrite';
+    const onDisk = written ? names[role] : agentFileName(path.join(repo, rel));
+    if (onDisk === names[role]) roles.push(role);
+    else log.warn(`${rel} ${onDisk ? `is named "${onDisk}"` : 'has no name in its frontmatter'}, not "${names[role]}": its effort setting would not apply. Run the bootstrap again with --force to re-render the agents.`);
+  }
+  return roles;
+}
+
+/** Copilot's user settings file (honours COPILOT_HOME). */
+export function copilotSettingsFile(env = process.env) {
+  return path.join(env.COPILOT_HOME || path.join(os.homedir(), '.copilot'), 'settings.json');
+}
+
+/**
+ * Set the subagents' reasoning effort in Copilot's user settings:
+ * subagents.agents.<agent name>.effortLevel for the Architect, Builder and Diff Reviewer.
+ * The Orchestrator is the main session: its effort is the chat's model picker (persistent mode)
+ * or --reasoning-effort (Ralph mode). Only the kit's own agent names are touched; the file as it
+ * was before the kit first changed it is kept as settings.json.bak-copilot-forever. 'inherit'
+ * removes the kit's entry. A file that is not valid JSON, or whose subagents setting is not an
+ * object, is left alone with a warning.
+ */
+export function applyEffortSettings(cfg, log, { dryRun = false, file = copilotSettingsFile(), roles = ['architect', 'builder', 'reviewer'] } = {}) {
+  const names = agentNames(cfg);
+  let text = '';
+  let data = {};
+  if (exists(file)) {
+    text = fs.readFileSync(file, 'utf8');
+    try {
+      data = JSON.parse(text.replace(/^\s*\/\/.*$/gm, '')) ?? {};
+    } catch (e) {
+      log.warn(`not changing ${file}: it is not valid JSON (${e.message}); set the effort with /subagents instead`);
+      return { changed: false, file };
+    }
+  }
+  const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+  if (!isObj(data)) data = {};
+  if ((data.subagents !== undefined && !isObj(data.subagents)) || (data.subagents?.agents !== undefined && !isObj(data.subagents.agents))) {
+    log.warn(`not changing ${file}: its "subagents" setting is not an object; set the effort with /subagents instead`);
+    return { changed: false, file };
+  }
+  const agents = ((data.subagents ??= {}).agents ??= {});
+  const changes = [];
+  for (const role of roles) {
+    const name = names[role];
+    const want = cfg.effort[role];
+    const have = agents[name]?.effortLevel;
+    if (want === 'inherit') {
+      if (have !== undefined) { delete agents[name].effortLevel; if (!Object.keys(agents[name]).length) delete agents[name]; changes.push(`${name}: inherit`); }
+    } else if (have !== want) {
+      agents[name] = { ...(agents[name] ?? {}), effortLevel: want };
+      changes.push(`${name}: ${want}`);
+    }
+  }
+  if (!roles.length) { log.info(`effort: no agent in this repository has its configured name; ${file} not changed`); return { changed: false, file }; }
+  if (!changes.length) { log.info(`effort: ${file} already matches`); return { changed: false, file }; }
+  log.info(`${dryRun ? 'would set' : 'set'} effort in ${file}: ${changes.join(', ')}`);
+  if (!dryRun) {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    // Keep the user's own file from before the kit first changed it; later runs do not replace it.
+    if (text && !exists(`${file}.bak-copilot-forever`)) fs.writeFileSync(`${file}.bak-copilot-forever`, text);
+    fs.writeFileSync(file, JSON.stringify(data, null, 2) + '\n');
+  }
+  return { changed: true, file, changes };
+}
+
 export function nextSteps(repo, cfg, { linked, started = false }) {
+  const names = agentNames(cfg);
   const cf = linked ? 'copilot-forever' : `node "${path.join(KIT_ROOT, 'bin', 'copilot-forever.mjs')}"`;
   const conf = '--config .goal-loop/copilot-forever.config.json';
   const port = cfg.keepAlive?.port ?? 47801;
@@ -209,7 +315,7 @@ export function nextSteps(repo, cfg, { linked, started = false }) {
   return `
 Next steps (in ${repo}):
 
- 1. Write your goal in .goal-loop/GOAL.md (or paste it into the chat in step 6; the Orchestrator saves it there).
+ 1. Write your goal in .goal-loop/GOAL.md (or paste it into the chat in step 6; ${names.orchestrator} saves it there).
  2. Check .goal-loop/config.json: the models (the reviewer must be another model family than the
     builder), gate.command (your full test command) and the caps. After changing models, run the
     bootstrap again with --force to re-render the agents.
@@ -225,8 +331,9 @@ Next steps (in ${repo}):
 ${keepAlive}
     In VS Code, add the standalone host to the chat.remoteAgentHosts user setting:
     address localhost:${port}, token from ~/.copilot-forever/token.txt.
- 6. In the Agents window: new session on that host, folder ${repo}, agent "Orchestrator".
-    Send: start
+ 6. In the Agents window: new session on that host, folder ${repo}, agent "${names.orchestrator}".
+    In the chat's model picker, set the effort to ${cfg.effort.orchestrator === 'inherit' ? 'the level you want' : cfg.effort.orchestrator} (the Orchestrator is the
+    main session, so the per-agent effort settings do not apply to it). Send: start
  7. Read the plan it shows you. Reply APPROVE PLAN to let it file the issues and start building.
 
  Ralph loop (a fresh copilot -p Orchestrator run per step; no host, no trims):
@@ -241,7 +348,7 @@ ${keepAlive}
 
 /**
  * The whole bootstrap.
- * @param {{ repo: string, config?: string, dryRun?: boolean, force?: boolean, install?: boolean, link?: boolean, allowSameFamily?: boolean, print?: boolean, start?: boolean, log: any }} o
+ * @param {{ repo: string, config?: string, dryRun?: boolean, force?: boolean, install?: boolean, link?: boolean, allowSameFamily?: boolean, effort?: boolean, settingsFile?: string, print?: boolean, start?: boolean, log: any }} o
  */
 export async function bootstrap(o) {
   const { log, dryRun = false } = o;
@@ -283,6 +390,7 @@ export async function bootstrap(o) {
 
   log.info(`files in ${repo}:`);
   const results = writeFiles(repo, plannedFiles(cfg, repo), log, { dryRun, force: o.force });
+  if (o.effort !== false) applyEffortSettings(cfg, log, { dryRun, file: o.settingsFile, roles: effortRoles(repo, cfg, results, log) });
   if (missing.length) log.warn(`missing before the first run: ${missing.join(', ')}`);
   if (o.start) {
     // Persistent mode: schedule the watcher and start the standalone host for this repo now.

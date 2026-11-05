@@ -32,7 +32,7 @@ The long version is [VIDEO-SCRIPT.md](VIDEO-SCRIPT.md). This one is for recordin
 - Run the bootstrap: `node copilot-forever/bootstrap.mjs --repo loopboard --config copilot-forever/demo/goal-loop.config.json --start`
 - Say what it did: copied four agents into my repo, started a standalone agent host that doesn't belong to VS Code, and scheduled a watcher.
 - Open `.github/agents/`: Orchestrator, Architect, Builder, Diff Reviewer. "Sonnet 5.5 builds; GPT-6.1 Sol reviews. A different model family as a second opinion."
-- Add the host to VS Code, as the bootstrap printed, and start a new session on that host in the `loopboard` folder.
+- Add the host to VS Code, as the bootstrap printed, and start a new session on that host in the `loopboard` folder with the **Goal Orchestrator** agent; set the effort in the model picker to High. Optional line: "The planner and the reviewer think at maximum effort; the builder and the coordinator at high. Judgement where it matters, speed where the spec carries it."
 
 **4. The goal and the plan (2 min)**
 - Paste the goal from `demo/GOAL.md`. "That's all I'm telling it."
