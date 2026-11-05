@@ -119,17 +119,9 @@ async function main() {
       const h = await import('../src/host.mjs');
       if (sub === 'start') return (await h.startHost(cfg, log, { dryRun, foreground: o.foreground })) ? 0 : 1;
       if (sub === 'stop' || sub === 'status') {
-        const { processTable } = await import('../src/proc.mjs');
-        const { findSession } = await import('../src/session.mjs');
-        const info = h.findStandaloneHost(await h.agentPs(cfg), cfg.host.port);
-        if (!info) {
-          log.info(`no standalone host on port ${cfg.host.port}`);
-          return sub === 'status' ? 1 : 0;
-        }
-        const session = findSession(cfg, Number(info.host.pid), await processTable());
-        log.info(`standalone host pid ${info.host.pid} at ${info.host.address}; session: ${session ? `${session.id} (runtime ${session.runtimePid}, ${(session.size / 1048576).toFixed(1)} MiB)` : 'none for this repo'}`);
-        if (sub === 'status') return 0;
-        return (await h.stopHost(cfg, Number(info.host.pid), log, { runtimePid: session?.runtimePid, dryRun })) ? 0 : 1;
+        const r = await h.stopStandaloneHost(cfg, log, { dryRun, statusOnly: sub === 'status' });
+        if (r === null) return sub === 'status' ? 1 : 0;
+        return r ? 0 : 1;
       }
       throw new Refusal('usage: copilot-forever host start|stop|status', 2);
     }

@@ -5,14 +5,14 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { continueMessage, resolveConfig, validate, DEFAULTS } from '../src/config.mjs';
 import { activeRepoSessions, cleanEnv, findStandaloneHost, hostArgs, maskTokenInFile } from '../src/host.mjs';
-import { launchdPlists, systemdUnits, watchTimeLimitMinutes, windowsTaskXml } from '../src/install.mjs';
+import { launchdPlists, systemdUnits, uninstall, watchTimeLimitMinutes, windowsTaskXml } from '../src/install.mjs';
 import { addSecret, redact } from '../src/log.mjs';
 import { notifyCommand } from '../src/notify.mjs';
 import { descendants, isDescendant, isListening, pidAlive } from '../src/proc.mjs';
 import { checkSchema, parseEvents } from '../src/schema.mjs';
 import { findSession, lastTurnEvent, notIdleReason, workspaceCwd } from '../src/session.mjs';
-import { uriToPath, vscodeFileUri } from '../src/util.mjs';
-import { fixtureEvents, fixtureText, makeSession, rm, SID, tmpDir } from './helpers.mjs';
+import { Refusal, uriToPath, vscodeFileUri } from '../src/util.mjs';
+import { fixtureEvents, fixtureText, logger, makeSession, rm, SID, tmpDir } from './helpers.mjs';
 
 const win = process.platform === 'win32';
 const REPO = win ? 'C:\\work\\repo' : '/work/repo';
@@ -205,6 +205,74 @@ test('install: launchd agents', () => {
   assert.match(p['local.mine.host.plist'], /<string>--foreground<\/string>/);
   assert.match(p['local.mine.host.plist'], /<key>KeepAlive<\/key><false\/>/);
   assert.match(p['local.mine.watch.plist'], /<key>StartInterval<\/key><integer>600<\/integer>/);
+});
+
+// Injected stopper, port probe and lock: no schtasks call, kill or port probe happens on any OS.
+const winUninstall = (log, o) => uninstall(cfgFor({ instanceName: 'mine' }), log, { platform: 'win32', listening: async () => false, ...o });
+const taskLines = (log) => log.lines.map((l) => (/mine watch/.test(l) ? 'watch' : /mine host/.test(l) ? 'host' : /STOPPED/.test(l) ? 'stop' : null)).filter(Boolean);
+
+test('uninstall (Windows): watcher task, then the host stop, then the host task', async () => {
+  const calls = [];
+  const log = logger();
+  const stopper = async (_c, l, o) => { calls.push(o); l.info('STOPPED'); return true; };
+  await winUninstall(log, { dryRun: true, stopHost: true, stopper });
+  assert.deepEqual(taskLines(log), ['watch', 'stop', 'host']);
+  assert.deepEqual(calls, [{ dryRun: true }]);
+
+  // No host listed and the port closed is not a failure.
+  const log2 = logger();
+  await winUninstall(log2, { dryRun: true, stopHost: true, stopper: async () => null });
+  assert.deepEqual(taskLines(log2), ['watch', 'host']);
+  assert.ok(log2.lines.some((l) => /uninstalled\./.test(l)));
+
+  // Without --stop-host nothing is stopped or probed.
+  await winUninstall(logger(), { dryRun: true, stopper: async () => assert.fail('stopper called'), listening: async () => assert.fail('port probed') });
+});
+
+test('uninstall (Windows): every stop failure keeps the host task and says so', async () => {
+  const cases = [
+    { name: 'stop returns false', o: { stopper: async () => false }, re: /did not stop/ },
+    { name: 'stop throws (agent ps failed)', o: { stopper: async () => { throw new Error('agent ps --json failed (exit 3)'); } }, re: /could not stop the host: agent ps --json failed/ },
+    { name: 'no host listed, port still listening', o: { stopper: async () => null, listening: async () => true }, re: /still listening, but no standalone host is listed/ },
+  ];
+  for (const { name, o, re } of cases) {
+    const log = logger();
+    await assert.rejects(winUninstall(log, { dryRun: true, stopHost: true, ...o }),
+      (e) => e instanceof Refusal && re.test(e.message) && /watcher task was removed; the host task "mine host" is still installed/.test(e.message), name);
+    assert.deepEqual(taskLines(log), ['watch'], `${name}: host task kept`);
+    assert.ok(!log.lines.some((l) => /uninstalled/.test(l)), name);
+  }
+});
+
+test('uninstall (Windows): the watcher lock is refused while held and released once otherwise', async () => {
+  const log = logger();
+  let locked = '';
+  await assert.rejects(
+    winUninstall(log, { stopHost: true, lock: (f) => { locked = f; return null; }, stopper: async () => assert.fail('stopper called') }),
+    (e) => e instanceof Refusal && /watcher run is in progress/.test(e.message) && /no task was changed/.test(e.message) && /watch-mine\.lock/.test(e.message),
+  );
+  assert.match(locked, /watch-mine\.lock$/);
+  assert.deepEqual(taskLines(log), [], 'no task deleted');
+
+  // A real (non-dry) run releases the lock once on every outcome. Task deletes are stubbed.
+  const outcomes = [
+    { name: 'success', stopper: async () => true, ok: true },
+    { name: 'stop failed', stopper: async () => false, ok: false },
+    { name: 'host task delete failed', stopper: async () => true, failHost: true, ok: false },
+  ];
+  for (const { name, stopper, failHost, ok } of outcomes) {
+    let released = 0;
+    const deleted = [];
+    const deleteTask = async (t) => { if (failHost && t === 'mine host') throw new Error('schtasks failed'); deleted.push(t); };
+    const p = winUninstall(logger(), { stopHost: true, stopper, deleteTask, lock: () => () => { released++; } });
+    if (ok) await p;
+    else await assert.rejects(p, (e) => e instanceof Refusal && /host task "mine host" is still installed/.test(e.message), name);
+    assert.equal(released, 1, `${name}: lock released once`);
+    assert.deepEqual(deleted, ok ? ['mine watch', 'mine host'] : ['mine watch'], name);
+  }
+
+  // A dry run takes no lock (it changes nothing a watcher run could undo).
+  await winUninstall(logger(), { dryRun: true, stopHost: true, stopper: async () => true, lock: () => assert.fail('lock taken') });
 });
 
 // ---- notify ---------------------------------------------------------------------------------

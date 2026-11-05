@@ -226,3 +226,22 @@ export async function stopHost(cfg, hostPid, log, { runtimePid = undefined, dryR
   return !pidAlive(hostPid);
 }
 
+/**
+ * Find the standalone host that `code agent ps` reports on the configured port and, unless
+ * `statusOnly`, stop it. Returns null when none is reported, otherwise whether the stop succeeded.
+ * @param {any} cfg @param {any} log @param {{ dryRun?: boolean, statusOnly?: boolean }} [opts]
+ */
+export async function stopStandaloneHost(cfg, log, { dryRun = false, statusOnly = false } = {}) {
+  const { processTable } = await import('./proc.mjs');
+  const { findSession } = await import('./session.mjs');
+  const info = findStandaloneHost(await agentPs(cfg), cfg.host.port);
+  if (!info) {
+    log.info(`no standalone host on port ${cfg.host.port}`);
+    return null;
+  }
+  const session = findSession(cfg, Number(info.host.pid), await processTable());
+  log.info(`standalone host pid ${info.host.pid} at ${info.host.address}; session: ${session ? `${session.id} (runtime ${session.runtimePid}, ${(session.size / 1048576).toFixed(1)} MiB)` : 'none for this repo'}`);
+  if (statusOnly) return true;
+  return stopHost(cfg, Number(info.host.pid), log, { runtimePid: session?.runtimePid, dryRun });
+}
+

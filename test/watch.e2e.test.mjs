@@ -162,10 +162,30 @@ test('a request with nothing safe to trim is refused without stopping the host, 
   assert.match(JSON.parse(turns[turns.length - 1]).message.text, /did NOT happen/);
 });
 
+test('host status and host stop --dry-run find the host and leave it running', async () => {
+  const s = state();
+  const st = await cli('host', 'status');
+  assert.equal(st.code, 0, st.out);
+  assert.match(st.out, new RegExp(`standalone host pid ${s.hostPid} at localhost:${port}`));
+  const dry = await cli('host', 'stop', '--dry-run');
+  assert.equal(dry.code, 0, dry.out);
+  assert.match(dry.out, new RegExp(`would stop host ${s.hostPid}`));
+  assert.ok(pidAlive(s.hostPid), 'dry run stopped nothing');
+});
+
 test('host stop stops the host and its runtime', async () => {
   const s = state();
   const r = await cli('host', 'stop');
   assert.equal(r.code, 0, r.out);
   assert.ok(!pidAlive(s.hostPid));
   assert.ok(!pidAlive(s.runtimePid));
+});
+
+test('with no host: host status exits 1, host stop exits 0', async () => {
+  const st = await cli('host', 'status');
+  assert.equal(st.code, 1, st.out);
+  assert.match(st.out, new RegExp(`no standalone host on port ${port}`));
+  const sp = await cli('host', 'stop');
+  assert.equal(sp.code, 0, sp.out);
+  assert.match(sp.out, /no standalone host/);
 });

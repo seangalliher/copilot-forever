@@ -26,6 +26,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Fixed
 
+- Windows: `uninstall --stop-host` now stops the running host. Before, it deleted the scheduled tasks and reported "uninstalled." while the host kept running (seen on a real Windows install: deleting a task did not stop the process it started). It now takes the watcher lock (refusing, with nothing changed, while a watcher run such as a trim is in progress), deletes the watcher task, stops the host and checks that its port has closed, then deletes the host task. If the stop fails, the host task stays installed and the error says what is left and what to do next.
 - A trim no longer fails to restart the host when the killed host's listening socket outlives it briefly (seen on Windows): `stopHost` waits up to 30 s for the port to close, so the restart doesn't find the port "already listening" and skip the start.
 - Windows: the scheduled tasks no longer flash a console window on every run. They now start through `conhost.exe --headless`; run `install` again to update existing tasks.
 - The agent snippet now tells the agent what to do with a network-resume "Continue." message, not only a trim one.

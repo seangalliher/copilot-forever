@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { run } from './proc.mjs';
+import { isListening, run } from './proc.mjs';
 import { exists, readJson, Refusal, sys32, writeJsonAtomic } from './util.mjs';
 
 export const BIN = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'copilot-forever.mjs');
@@ -214,14 +214,65 @@ export async function install(cfg, log, { dryRun = false, platform = process.pla
     : 'installed. The host service starts at login; the watcher timer is running.');
 }
 
+/** Stop the host for `uninstall --stop-host` (Windows); throws a Refusal saying what is left installed. */
+async function stopHostForUninstall(cfg, log, { dryRun, stopper, listening, hostTask }) {
+  const refuse = (why, fix = 'Stop the host with: copilot-forever host stop') => new Refusal(`${why}. The watcher task was removed; the host task "${hostTask}" is still installed. ${fix}, then run uninstall --stop-host again (or install to restore the watcher)`, 1);
+  const stop = stopper ?? (await import('./host.mjs')).stopStandaloneHost;
+  let r;
+  try {
+    r = await stop(cfg, log, { dryRun });
+  } catch (e) {
+    throw refuse(`could not stop the host: ${e?.message ?? e}`);
+  }
+  if (r === false) throw refuse(`the host on port ${cfg.host.port} did not stop`);
+  // The port is the test: agent ps may not list a host that is still listening.
+  if ((r === null || !dryRun) && (await listening(cfg.host.port))) {
+    if (r === null) {
+      throw refuse(`port ${cfg.host.port} is still listening, but no standalone host is listed there`,
+        `Find the process on that port (Windows: netstat -ano | findstr :${cfg.host.port}) and stop it`);
+    }
+    throw refuse(`port ${cfg.host.port} is still listening after the stop`);
+  }
+  return refuse;
+}
+
 /**
  * Remove the schedule. The running host keeps running (stopping it would stop the agent);
  * pass stopHost to stop it as well.
+ * @param {any} cfg @param {any} log
+ * @param {{ dryRun?: boolean, stopHost?: boolean, platform?: string,
+ *   stopper?: (cfg: any, log: any, o: { dryRun: boolean }) => Promise<boolean | null>,
+ *   listening?: (port: number) => Promise<boolean>, lock?: (file: string) => (() => void) | null,
+ *   deleteTask?: (name: string) => Promise<any> }} [opts]
+ *   stopper, listening, lock and deleteTask are for tests; they default to the real host stop, port
+ *   probe, watcher lock and schtasks /Delete.
  */
-export async function uninstall(cfg, log, { dryRun = false, stopHost = false, platform = process.platform } = {}) {
+export async function uninstall(cfg, log, { dryRun = false, stopHost = false, platform = process.platform, stopper = undefined, listening = isListening, lock = undefined, deleteTask = undefined } = {}) {
   const n = names(cfg);
   if (platform === 'win32') {
-    for (const name of [n.winWatch, n.winHost]) await must(log, dryRun, sys32('schtasks.exe'), ['/Delete', '/TN', name, '/F'], { okCodes: [0, 1] });
+    const del = deleteTask ?? ((name) => must(log, dryRun, sys32('schtasks.exe'), ['/Delete', '/TN', name, '/F'], { okCodes: [0, 1] }));
+    // A watcher run in progress (a trim stops and restarts the host) holds the watcher lock.
+    // Taking it before changing anything keeps such a run from restarting the host behind us.
+    const release = stopHost && !dryRun ? (lock ?? (await import('./watch.mjs')).takeLock)(cfg.lockFile) : () => {};
+    if (!release) throw new Refusal(`a watcher run is in progress (it may be trimming and restarting the host); no task was changed. Wait for it to finish and run uninstall again. If no watcher is running, the lock is stale: delete ${cfg.lockFile}`, 1);
+    try {
+      // Removing the watcher task first stops future watcher runs from starting the host again.
+      await del(n.winWatch);
+      // Deleting a scheduled task does not stop the process it started, so stop the host directly.
+      // Any failure stops here, while the host task and the install marker still match.
+      if (stopHost) {
+        const refuse = await stopHostForUninstall(cfg, log, { dryRun, stopper, listening, hostTask: n.winHost });
+        try {
+          await del(n.winHost);
+        } catch (e) {
+          throw refuse(`the host stopped, but deleting its task failed: ${e?.message ?? e}`, 'Delete the task in Task Scheduler');
+        }
+      } else {
+        await del(n.winHost);
+      }
+    } finally {
+      release();
+    }
   } else if (platform === 'linux') {
     await must(log, dryRun, 'systemctl', ['--user', 'disable', '--now', n.unitTimer], { okCodes: [0, 1, 5] });
     await must(log, dryRun, 'systemctl', ['--user', 'disable', ...(stopHost ? ['--now'] : []), n.unitHost], { okCodes: [0, 1, 5] });
