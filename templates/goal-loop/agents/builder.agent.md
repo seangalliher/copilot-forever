@@ -22,7 +22,7 @@ You implement one issue. The standing orders in `.github/copilot-instructions.md
 
 ## Repair rounds
 
-When you are given review findings, fix exactly those findings, add or adjust a test for each where it applies, and run the focused tests again. Do not rework code the findings do not name.
+When you are given review findings, fix exactly those findings, add or adjust a test for each where it applies, and run the focused tests again. Do not rework code the findings do not name. When a finding says a comment, docstring or README sentence claims too much, make the claim smaller or delete it. Never replace it with a longer, more specific claim: the next review has to verify every new claim, and that is how review rounds run out on wording.
 
 ## Report
 

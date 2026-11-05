@@ -1,8 +1,11 @@
 # Time-lapse of the screen during a long agent run (Windows; needs ffmpeg on PATH).
 #
-#   pwsh demo/capture/timelapse.ps1 start [-Every 5] [-Monitor primary|all] [-Dir <folder>]
+#   pwsh demo/capture/timelapse.ps1 start [-Every 5] [-Monitor primary|all] [-Window <title regex>] [-Dir <folder>]
 #       Saves one JPEG every -Every seconds in the background, until stopped. Survives closing the
 #       terminal; a restart continues the numbering. Frames are plain files, so a crash loses nothing.
+#       -Window captures one window only (for example -Window '^Agents$' for the VS Code Agents window),
+#       through Windows Graphics Capture: it works while other windows cover it, and nothing else on the
+#       screen is recorded. If that window closes (quitting VS Code), capture stops; run start again.
 #   pwsh demo/capture/timelapse.ps1 stop
 #   pwsh demo/capture/timelapse.ps1 status
 #   pwsh demo/capture/timelapse.ps1 build [-Seconds 75] [-Out <file.mp4>]
@@ -15,6 +18,7 @@ param(
     [Parameter(Position = 0, Mandatory)][ValidateSet('start', 'stop', 'status', 'build')][string]$Action,
     [double]$Every = 5,
     [ValidateSet('primary', 'all')][string]$Monitor = 'primary',
+    [string]$Window,
     [string]$Dir = (Join-Path ([Environment]::GetFolderPath('MyVideos')) 'goal-loop-timelapse'),
     [double]$Seconds = 75,
     [string]$Out
@@ -38,18 +42,26 @@ switch ($Action) {
         if (Get-Running) { Write-Host "already running (pid $(Get-Content $pidFile))"; exit 0 }
         $existing = Get-Frames
         $next = if ($existing.Count) { [int]$existing[-1].BaseName + 1 } else { 1 }
-        $grab = @('-f', 'gdigrab', '-framerate', "1/$Every", '-draw_mouse', '1')
-        if ($Monitor -eq 'primary') {
-            Add-Type -AssemblyName System.Windows.Forms
-            $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
-            $grab += @('-offset_x', "$($b.X)", '-offset_y', "$($b.Y)", '-video_size', "$($b.Width)x$($b.Height)")
+        $out = @('-q:v', '4', '-start_number', "$next", (Join-Path $frames '%06d.jpg'))
+        if ($Window) {
+            # gdigrab returns black frames for GPU-drawn windows such as VS Code; Windows Graphics
+            # Capture (ffmpeg 8+, gfxcapture) does not. fps= keeps a steady rate when the window is idle.
+            $re = $Window -replace '([\:,;\[\]=''])', '\$1'
+            $fc = "gfxcapture=window_title=$($re):max_framerate=2,hwdownload,format=bgra,fps=1/$Every,scale='min(1920,iw)':-2"
+            $ffArgs = @('-hide_banner', '-loglevel', 'error', '-filter_complex', "`"$fc`"") + $out
+        } else {
+            $grab = @('-f', 'gdigrab', '-framerate', "1/$Every", '-draw_mouse', '1')
+            if ($Monitor -eq 'primary') {
+                Add-Type -AssemblyName System.Windows.Forms
+                $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+                $grab += @('-offset_x', "$($b.X)", '-offset_y', "$($b.Y)", '-video_size', "$($b.Width)x$($b.Height)")
+            }
+            $ffArgs = @('-hide_banner', '-loglevel', 'error') + $grab + @('-i', 'desktop', '-vf', 'scale=1920:-2') + $out
         }
-        $ffArgs = @('-hide_banner', '-loglevel', 'error') + $grab + @('-i', 'desktop',
-            '-vf', 'scale=1920:-2', '-q:v', '4', '-start_number', "$next", (Join-Path $frames '%06d.jpg'))
         $p = Start-Process -FilePath $ffmpeg -ArgumentList $ffArgs -WindowStyle Hidden -PassThru `
             -RedirectStandardError (Join-Path $Dir 'ffmpeg.err.txt')
         Set-Content $pidFile $p.Id
-        Write-Host "time-lapse started (pid $($p.Id)): one frame every $Every s, $Monitor monitor, into $frames"
+        Write-Host "time-lapse started (pid $($p.Id)): one frame every $Every s, $(if ($Window) { "window /$Window/" } else { "$Monitor monitor" }), into $frames"
     }
     'stop' {
         $p = Get-Running

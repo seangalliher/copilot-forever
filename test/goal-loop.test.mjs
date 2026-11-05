@@ -167,6 +167,8 @@ test('templates: every placeholder renders and frontmatter carries the configure
   assert.match(orch, /Never enable auto-merge/);
   assert.match(orch, /Long-running session: log trims at safe points/, 'safe-point rule embedded');
   assert.match(orch, /\.goal-loop\/trim-request\.json/);
+  assert.match(orch, /never blocks after round 1/, 'wording-only findings do not use up review rounds');
+  assert.match(byName['.github/agents/builder.agent.md'], /make the claim smaller or delete it/, 'repairs shrink claims');
   assert.ok(!/tools:/.test(orch.split('---')[1]), 'orchestrator keeps all tools (it delegates)');
   assert.ok(!/\bedit\b/.test(byName['.github/agents/diff-reviewer.agent.md'].split('---')[1]), 'reviewer cannot edit');
 });

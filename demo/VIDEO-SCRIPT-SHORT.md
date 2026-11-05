@@ -13,7 +13,7 @@ The long version is [VIDEO-SCRIPT.md](VIDEO-SCRIPT.md). This one is for recordin
 - [ ] Notifications on (Windows: Focus off) so the trim toast shows.
 - [ ] Close anything private: other browser tabs, email, chat. Never show the token file or `gh auth` output.
 - [ ] Note your Copilot usage (AI credits) so you can say what the run cost.
-- [ ] Start the time-lapse: `pwsh demo/capture/timelapse.ps1 start` (one frame every 5 seconds; it keeps running when you stop recording).
+- [ ] Start the time-lapse of the Agents window only: `pwsh demo/capture/timelapse.ps1 start -Window '^Agents$'` (one frame every 5 seconds; it keeps running when you stop recording, and nothing else on your screen is captured). Size the Agents window to 1920×1080 (a FancyZones zone works) *before* starting: the capture keeps the size the window had when it started, so after a resize, run stop and start again. Quitting VS Code stops the capture: run the same command again after you reopen it.
 
 ---
 
@@ -71,6 +71,7 @@ The time-lapse runs. When the build is finished:
 - Quit VS Code completely. Reopen it. The session is still there and still working. "The agent never belonged to VS Code."
 - If the trim happened, show the notification or the watcher's log: "its log was trimmed and it resumed on its own." If it didn't happen during the run, one sentence on what the trim does is enough.
 - One line on network drops: "If the network drops mid-turn, the watcher waits for the API to come back and tells it to continue." If it happened during the run, show that notification.
+- One line on stalls: "And if it ends a turn waiting on background work and nothing wakes it, the watcher notices the silence and tells it to check that work."
 
 **4. Why not just a Ralph loop? (45 s)**
 - A Ralph loop reruns the agent fresh every time: simple, robust, and a good default.
