@@ -98,6 +98,51 @@ export function notIdleReason(cfg, hostInfo, session, now = Date.now()) {
   return null;
 }
 
+/**
+ * A stale host status: the host lists the session as active, yet the log's last turn ended and
+ * the log has been quiet for `watch.staleHostMinutes`. Returns `{ quietMinutes, logMtimeMs }`, or
+ * null. During a tool call the last turn event is `assistant.turn_start` (a turn ends only after
+ * its tools complete), so a long command never looks stale.
+ */
+export function staleHostStatus(cfg, hostInfo, session, now = Date.now()) {
+  const limit = cfg.watch.staleHostMinutes;
+  if (!limit || !activeRepoSessions(hostInfo, cfg.repoFolder).length) return null;
+  const file = path.join(session.dir, 'events.jsonl');
+  const logMtimeMs = fs.statSync(file).mtimeMs;
+  const quietMinutes = (now - logMtimeMs) / 60000;
+  if (quietMinutes < limit) return null;
+  if (lastTurnEvent(file) !== 'assistant.turn_end') return null;
+  // A turn whose last tool call is ask_user waits on an answer; Stop would abort it. A question
+  // asked in plain text (then task_complete) is not detected; the notice text leaves that to you.
+  if (lastTurnAsked(file)) return null;
+  return { quietMinutes: Math.floor(quietMinutes), logMtimeMs };
+}
+
+/** Whether the last turn (from its `assistant.turn_start` to the end of the log) called `ask_user`. */
+export function lastTurnAsked(file, maxBytes = 4 * 1048576) {
+  const size = fs.statSync(file).size;
+  const len = Math.min(size, maxBytes);
+  const fd = fs.openSync(file, 'r');
+  let text;
+  try {
+    const buf = Buffer.alloc(len);
+    fs.readSync(fd, buf, 0, len, size - len);
+    text = buf.toString('utf8');
+  } finally {
+    fs.closeSync(fd);
+  }
+  const lines = text.split('\n');
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const l = lines[i];
+    if (!l.includes('assistant.turn_start') && !l.includes('ask_user')) continue;
+    let e;
+    try { e = JSON.parse(l); } catch { continue; }
+    if (e.type === 'assistant.turn_start') return false;
+    if (e.type === 'tool.execution_start' && e.data?.toolName === 'ask_user') return true;
+  }
+  return false;
+}
+
 const semver = (s) => {
   const m = /(\d+)\.(\d+)\.(\d+)/.exec(String(s ?? ''));
   return m ? { major: Number(m[1]), minor: Number(m[2]), patch: Number(m[3]), text: m[0] } : null;

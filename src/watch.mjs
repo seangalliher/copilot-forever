@@ -19,7 +19,7 @@ import { notify } from './notify.mjs';
 import { maybeResume, maybeStallResume } from './resume.mjs';
 import { isListening, pidAlive, processTable } from './proc.mjs';
 import { checkSchema, readEvents } from './schema.mjs';
-import { checkVersions, findSession, notIdleReason, readFirstEvent } from './session.mjs';
+import { checkVersions, findSession, notIdleReason, readFirstEvent, staleHostStatus } from './session.mjs';
 import { findCut, trimSession } from './trim.mjs';
 import { exists, mib, nowIso, readJson, sleep, stampUtc, vscodeFileUri, writeJsonAtomic } from './util.mjs';
 
@@ -38,6 +38,24 @@ export function takeLock(file) {
     }
   }
   return null;
+}
+
+/**
+ * Notify once per stale episode (keyed by the log's mtime) when the host still lists the session
+ * as running although its last turn ended long ago. A stale status blocks trims and resumes, and
+ * the watcher never overrides the host, so a person has to clear it (Stop in the chat).
+ * Seen on a real host: a requested trim waited over 2 hours on one.
+ */
+export async function maybeNotifyStale(cfg, log, { hostInfo, session, dryRun = false, requested = false, notify: send, now = Date.now() }) {
+  const stale = staleHostStatus(cfg, hostInfo, session, now);
+  if (!stale) return { state: 'ok' };
+  const key = new Date(stale.logMtimeMs).toISOString();
+  try { if (readJson(cfg.staleStateFile).log_mtime === key) return { state: 'already-notified', ...stale }; } catch { /* none yet */ }
+  log.warn(`stale host status: the host lists the session as running, but its last turn ended and the log has been quiet ${stale.quietMinutes} min`);
+  if (dryRun) return { state: 'would-notify', ...stale };
+  writeJsonAtomic(cfg.staleStateFile, { log_mtime: key, notified_at: nowIso() });
+  await send('Agent host status stuck', `The host still lists the session as running, but its last turn ended ${stale.quietMinutes} min ago. ${requested ? 'A requested log trim is waiting on it. ' : ''}Open the chat. If it shows as running with no question or background work pending, press Stop.`);
+  return { state: 'notified', ...stale };
 }
 
 export function statusObject(cfg, session, ahpSession, sizeBytes) {
@@ -130,6 +148,13 @@ async function watchInner(cfg, log, { dryRun, force }) {
   const st = statusObject(cfg, session, ahpSession, session.size);
   if (dryRun) log.info(`status would be: ${JSON.stringify(st)}`);
   else writeJsonAtomic(cfg.files.status, st);
+  let stale;
+  try {
+    stale = await maybeNotifyStale(cfg, log, { hostInfo, session, dryRun, requested: !!request, notify: (title, body) => notify(cfg, log, title, body) });
+  } catch (e) {
+    log.warn(`stale host check failed: ${e.message}`);
+    stale = { state: 'error' };
+  }
   if (!request) {
     const io = {
       hostInfo, session, ahpSession, dryRun,
@@ -139,7 +164,7 @@ async function watchInner(cfg, log, { dryRun, force }) {
     const resume = await maybeResume(cfg, log, io);
     // A network resume this run already sent a continue (or is waiting on one); check stalls next run.
     const stall = ['resumed', 'resume-failed', 'would-resume'].includes(resume.state) ? { state: 'skipped' } : await maybeStallResume(cfg, log, io);
-    return { state: 'status', status: st, resume, stall };
+    return { state: 'status', status: st, resume, stall, stale };
   }
 
   // ---- trim run ------------------------------------------------------------------------------
@@ -159,7 +184,7 @@ async function watchInner(cfg, log, { dryRun, force }) {
   }
   if (why) {
     log.info(`not idle yet (${why}); will check again next run`);
-    return { state: 'not-idle', why };
+    return { state: 'not-idle', why, stale };
   }
 
   // Safety, before anything is stopped: versions, log layout, and a usable cut point.

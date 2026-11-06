@@ -24,7 +24,8 @@
     "continueDelaySeconds": 20,
     "continueTries": 3,
     "continueRetrySeconds": 30,
-    "continueTimeoutSeconds": 180
+    "continueTimeoutSeconds": 180,
+    "staleHostMinutes": 30
   },
   "files": {
     "status": "logs/session-log-status.json",

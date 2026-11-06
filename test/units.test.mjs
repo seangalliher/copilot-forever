@@ -5,13 +5,14 @@ import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import { continueMessage, resolveConfig, validate, DEFAULTS } from '../src/config.mjs';
-import { activeRepoSessions, cleanEnv, findStandaloneHost, hostArgs, maskTokenInFile } from '../src/host.mjs';
+import { activeRepoSessions, agentPs, cleanEnv, findStandaloneHost, hostArgs, maskTokenInFile } from '../src/host.mjs';
 import { launchdPlists, SCHEDULE_VERSION, systemdUnits, uninstall, watchTimeLimitMinutes, windowsTaskXml } from '../src/install.mjs';
 import { addSecret, redact } from '../src/log.mjs';
 import { notifyCommand } from '../src/notify.mjs';
 import { descendants, isDescendant, isListening, pidAlive } from '../src/proc.mjs';
 import { checkSchema, parseEvents } from '../src/schema.mjs';
-import { findSession, lastTurnEvent, notIdleReason, workspaceCwd } from '../src/session.mjs';
+import { findSession, lastTurnAsked, lastTurnEvent, notIdleReason, staleHostStatus, workspaceCwd } from '../src/session.mjs';
+import { maybeNotifyStale } from '../src/watch.mjs';
 import { Refusal, uriToPath, vscodeFileUri } from '../src/util.mjs';
 import { BIN, fixtureEvents, fixtureText, freePort, logger, makeSession, rm, SID, tmpDir } from './helpers.mjs';
 
@@ -170,6 +171,91 @@ test('session: idle needs an inactive host listing, a quiet log and an ended tur
     assert.match(notIdleReason(cfg, idleHost, session), /not ended/);
     fs.utimesSync(file, Date.now() / 1000, Date.now() / 1000);
     assert.match(notIdleReason(cfg, idleHost, session), /written/);
+  } finally { rm(d); }
+});
+
+test('session: a stale host status needs a busy listing, an ended turn and a long-quiet log', () => {
+  const d = tmpDir();
+  try {
+    const { dir, file } = makeSession(d, 'basic.jsonl', { cwd: REPO });
+    const cfg = cfgFor({ watch: { staleHostMinutes: 30 } });
+    const session = { id: SID, dir };
+    const idleHost = { host: {}, sessions: [] };
+    const busyHost = { host: {}, sessions: [{ workingDirectories: [vscodeFileUri(REPO)] }] };
+    const at = (minutesAgo) => { const t = Date.now() / 1000 - minutesAgo * 60; fs.utimesSync(file, t, t); };
+    at(45);
+    const s = staleHostStatus(cfg, busyHost, session);
+    assert.ok(s && s.quietMinutes >= 44 && s.quietMinutes <= 45, JSON.stringify(s));
+    assert.equal(staleHostStatus(cfg, idleHost, session), null, 'the host agrees the session is idle');
+    assert.equal(staleHostStatus(cfgFor({ watch: { staleHostMinutes: 0 } }), busyHost, session), null, '0 turns it off');
+    at(10);
+    assert.equal(staleHostStatus(cfg, busyHost, session), null, 'not quiet long enough');
+    fs.appendFileSync(file, JSON.stringify({ type: 'assistant.turn_start', id: 'z1', parentId: 'e017', data: {} }) + '\n');
+    at(45);
+    assert.equal(staleHostStatus(cfg, busyHost, session), null, 'a turn still open (a long tool call) is not stale');
+  } finally { rm(d); }
+});
+
+test('session: a turn that ended on an ask_user question is a pending question, not a stale status', () => {
+  const d = tmpDir();
+  try {
+    const { dir, file } = makeSession(d, 'basic.jsonl', { cwd: REPO });
+    const cfg = cfgFor({ watch: { staleHostMinutes: 30 } });
+    const session = { id: SID, dir };
+    const busyHost = { host: {}, sessions: [{ workingDirectories: [vscodeFileUri(REPO)] }] };
+    const ev = (type, data = {}) => fs.appendFileSync(file, JSON.stringify({ type, id: `q${Math.random()}`, parentId: 'e017', data }) + '\n');
+    ev('assistant.turn_start');
+    ev('tool.execution_start', { toolName: 'ask_user', toolCallId: 'a1' });
+    ev('tool.execution_complete', { toolCallId: 'a1' });
+    ev('assistant.turn_end');
+    const t = Date.now() / 1000 - 3600;
+    fs.utimesSync(file, t, t);
+    assert.equal(lastTurnAsked(file), true);
+    assert.equal(staleHostStatus(cfg, busyHost, session), null);
+    ev('assistant.turn_start'); // the next turn asks nothing
+    ev('tool.execution_start', { toolName: 'task_complete', toolCallId: 'a2' });
+    ev('assistant.turn_end');
+    fs.utimesSync(file, t, t);
+    assert.equal(lastTurnAsked(file), false);
+    assert.ok(staleHostStatus(cfg, busyHost, session), 'task_complete is the stale case');
+  } finally { rm(d); }
+});
+
+test('watch: a stale host status notifies once per episode, and not in a dry run', async () => {
+  const d = tmpDir();
+  try {
+    const { dir, file } = makeSession(d, 'basic.jsonl', { cwd: REPO });
+    const cfg = cfgFor({ stateDir: path.join(d, 'state') });
+    const session = { id: SID, dir };
+    const hostInfo = { host: {}, sessions: [{ workingDirectories: [vscodeFileUri(REPO)] }] };
+    const t = Date.now() / 1000 - 3600;
+    fs.utimesSync(file, t, t);
+    const sent = [];
+    const io = { hostInfo, session, requested: true, notify: async (title, body) => { sent.push({ title, body }); } };
+    assert.equal((await maybeNotifyStale(cfg, logger(), { ...io, dryRun: true })).state, 'would-notify');
+    assert.equal(sent.length, 0, 'a dry run sends nothing');
+    assert.equal((await maybeNotifyStale(cfg, logger(), io)).state, 'notified');
+    assert.equal(sent.length, 1);
+    assert.match(sent[0].body, /trim is waiting/);
+    assert.match(sent[0].body, /no question or background work pending, press Stop/);
+    assert.equal((await maybeNotifyStale(cfg, logger(), io)).state, 'already-notified');
+    assert.equal(sent.length, 1, 'once per episode');
+    fs.utimesSync(file, t + 60, t + 60); // the log moved on, then went stale again: a new episode
+    assert.equal((await maybeNotifyStale(cfg, logger(), io)).state, 'notified');
+    assert.equal(sent.length, 2);
+    assert.equal((await maybeNotifyStale(cfg, logger(), { ...io, hostInfo: { host: {}, sessions: [] } })).state, 'ok');
+  } finally { rm(d); }
+});
+
+test('host: agent ps output with the CLI\'s own log lines ahead of the JSON still parses', async () => {
+  const d = tmpDir();
+  try {
+    const script = path.join(d, 'fake-code.mjs');
+    fs.writeFileSync(script, `console.log('[2026-11-06 22:57:42] info Updating the server');\nconsole.log(JSON.stringify([{ host: { type: 'standalone', pid: 1, address: 'localhost:47801' }, sessions: [] }]));\n`);
+    const cfg = cfgFor({ host: { codeCommand: [process.execPath, script] } });
+    const hosts = await agentPs(cfg);
+    assert.equal(hosts.length, 1);
+    assert.equal(hosts[0].host.address, 'localhost:47801');
   } finally { rm(d); }
 });
 

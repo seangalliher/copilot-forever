@@ -43,6 +43,9 @@ export const DEFAULTS = Object.freeze({
     continueTries: 3,
     continueRetrySeconds: 30,
     continueTimeoutSeconds: 180,
+    // Notify when the host still lists the session as running although its last turn ended and
+    // the log has been quiet this long (a stale host status blocks trims and resumes). 0 = off.
+    staleHostMinutes: 30,
   },
   // Files the agent reads and writes, relative to repoFolder.
   files: {
@@ -192,6 +195,7 @@ export function resolveConfig(raw, baseDir, file = null) {
   cfg.lockFile = path.join(cfg.stateDir, `watch-${cfg.instanceName}.lock`);
   cfg.resumeStateFile = path.join(cfg.stateDir, `resume-${cfg.instanceName}.json`);
   cfg.stallStateFile = path.join(cfg.stateDir, `stall-${cfg.instanceName}.json`);
+  cfg.staleStateFile = path.join(cfg.stateDir, `stale-${cfg.instanceName}.json`);
   cfg.installMarker = path.join(cfg.stateDir, `installed-${cfg.instanceName}.json`);
   return cfg;
 }

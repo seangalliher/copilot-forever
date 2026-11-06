@@ -88,7 +88,7 @@ The session is the `session-state` folder whose `workspace.yaml` names your repo
 
 **A trim run** happens only when the request file exists. In order:
 
-1. The session must be idle on two checks `idleRecheckSeconds` apart: not listed as active by the host, the log unwritten for `quietSeconds`, and the last turn ended.
+1. The session must be idle on two checks `idleRecheckSeconds` apart: not listed as active by the host, the log unwritten for `quietSeconds`, and the last turn ended. The host can keep listing a session as running after its turn ended (seen on a real host: a requested trim waited over 2 hours on it). The watcher never overrides the host. Instead, when the listing says running but the log's last turn ended `staleHostMinutes` ago, it notifies you once (not when that turn ended on an `ask_user` question; a question asked in plain text is not detected): open the chat and, if it shows as running with no question or background work pending, press Stop.
 2. Safety checks run before anything is stopped: the Copilot version, the log layout, and whether a successful compaction exists to cut at. If any check refuses, nothing is stopped or changed. The request is archived, the agent is told to continue (the message says the trim did not happen), and you are notified.
 3. The watcher stops the host's process tree and waits for the session's runtime to exit, which releases the lock.
 4. It trims the log. The full log is first copied to `~/.copilot/session-archive/<id>/events-<UTC>.jsonl`. The trim keeps the session-start header events and every event from the latest `session.compaction_start` whose `session.compaction_complete` has `data.success == true`. An event whose parent was cut is re-parented onto the last header event. The new log is written to a temp file and renamed over the old one, then read back and checked. If the check fails, the archive is restored.
@@ -233,6 +233,7 @@ Logs: `~/.copilot-forever/logs/copilot-forever.log` (the kit) and `host-<instanc
 | `trim.archiveDir` | `<copilotHome>/session-archive` | Where full logs are archived before a trim. |
 | `watch.intervalMinutes` | `10` | Watcher schedule. |
 | `watch.quietSeconds` / `idleRecheckSeconds` | `120` / `90` | Idle detection. |
+| `watch.staleHostMinutes` | `30` | Notify when the host still lists the session as running although its last turn ended this long ago. `0` turns it off. |
 | `watch.continueTries` / `continueTimeoutSeconds` | `3` / `180` | Continue attempts, and how long to wait for the agent to start working. |
 | `files.status` / `request` / `history` / `handoff` | `logs/…` | The files shared with the agent. |
 | `continueText` | (see example) | The continue message; `{handoff}` is replaced with the handoff path. |

@@ -91,7 +91,9 @@ export async function agentPs(cfg) {
   const r = await run(cmd, [...lead, 'agent', 'ps', '--json'], { timeoutMs: 60000 });
   if (r.code !== 0) throw new Error(`\`${cmd} agent ps --json\` failed (exit ${r.code}): ${redact((r.stderr || r.error?.message || '').trim())}`);
   try {
-    const j = JSON.parse(r.stdout);
+    // The CLI can print its own log lines ("[2026-11-06 22:57:42] info ...", e.g. while it
+    // updates itself) on stdout ahead of the JSON; seen on a real Windows host. Drop them.
+    const j = JSON.parse(r.stdout.split(/\r?\n/).filter((l) => !/^\[\d{4}-\d\d-\d\d[ T]/.test(l)).join('\n'));
     return Array.isArray(j) ? j : [];
   } catch {
     throw new Error(`\`${cmd} agent ps --json\` printed something that is not JSON`);
