@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
-import { execFile } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
-import { analyze, fmtMs, readSessionEvents, renderMarkdown, sessionFiles } from '../src/report.mjs';
+import { analyze, fmtMs, gitChanges, parseShortstat, readSessionEvents, renderMarkdown, sessionFiles, summarizeChanges } from '../src/report.mjs';
 import { Refusal } from '../src/util.mjs';
 import { BIN, rm, tmpDir } from './helpers.mjs';
 
@@ -312,5 +312,73 @@ test('report CLI: --session with a path needs no config; --json and --out', asyn
     assert.equal(w.code, 0, w.stderr);
     assert.equal(w.stdout, '');
     assert.match(fs.readFileSync(out, 'utf8'), /## By role/);
+  } finally { rm(dir); }
+});
+
+test('report: commit sizes parsed from git log --shortstat, with median and largest', () => {
+  const text = ['@@aaa', '', ' 2 files changed, 10 insertions(+), 3 deletions(-)', '@@bbb', '', ' 1 file changed, 1 insertion(+)', '@@ccc', '@@ddd', '', ' 1 file changed, 4 deletions(-)'].join('\n');
+  const commits = parseShortstat(text);
+  assert.deepEqual(commits.map((c) => [c.sha, c.files, c.added, c.removed]), [['aaa', 2, 10, 3], ['bbb', 1, 1, 0], ['ccc', 0, 0, 0], ['ddd', 1, 0, 4]]);
+  assert.deepEqual(summarizeChanges(commits), { commits: 4, files: 4, added: 11, removed: 7, medianLines: 2.5, largestLines: 13 });
+  assert.deepEqual(summarizeChanges([]), { commits: 0, files: 0, added: 0, removed: 0, medianLines: null, largestLines: null });
+});
+
+test('report: changes come from the repository: the span, the committer, deleted branches, merges, a subfolder; none outside a repo', async () => {
+  const dir = tmpDir('cf-report-git-');
+  try {
+    const at = (iso, email = 'loop@example.com') => ({ ...process.env, GIT_AUTHOR_DATE: iso, GIT_COMMITTER_DATE: iso, GIT_COMMITTER_EMAIL: email, GIT_AUTHOR_EMAIL: email, GIT_COMMITTER_NAME: 'x', GIT_AUTHOR_NAME: 'x' });
+    const git = (env, ...a) => execFileSync('git', ['-C', dir, ...a], { env, stdio: 'pipe', windowsHide: true });
+    const commit = (iso, file, lines, email) => {
+      fs.writeFileSync(path.join(dir, file), Array.from({ length: lines }, (_, i) => `line ${i}`).join('\n') + '\n');
+      git(at(iso, email), 'add', file);
+      git(at(iso, email), 'commit', '-q', '-m', file);
+    };
+    git(process.env, 'init', '-q', '-b', 'main');
+    git(process.env, 'config', 'user.email', 'loop@example.com');
+    git(process.env, 'config', 'user.name', 'x');
+    commit('2026-01-01T00:00:00Z', 'before.txt', 50); // before the span
+    commit('2026-01-02T01:00:00Z', 'a.txt', 3);
+    commit('2026-01-02T02:00:00Z', 'b.txt', 7, 'noreply@github.com'); // another committer (a squash merge)
+    commit('2026-01-02T02:30:00Z', 'e.txt', 9, 'loop@exampleXcom'); // matches only if the email were a regex
+    git(process.env, 'checkout', '-q', '-b', 'feat');
+    commit('2026-01-02T03:00:00Z', 'c.txt', 5);
+    git(process.env, 'checkout', '-q', 'main');
+    git(process.env, 'branch', '-q', '-D', 'feat'); // deleted after merging: still in the reflog
+    fs.mkdirSync(path.join(dir, 'sub'));
+    commit('2026-01-02T04:00:00Z', 'sub/d.txt', 4);
+    git(process.env, 'checkout', '-q', '-b', 'm');
+    commit('2026-01-02T05:00:00Z', 'm.txt', 2);
+    git(process.env, 'checkout', '-q', 'main');
+    git(at('2026-01-02T06:00:00Z'), 'merge', '-q', '--no-ff', '-m', 'merge m', 'm'); // the merge commit is left out
+    const span = ['2026-01-02T00:00:00Z', '2026-01-02T23:00:00Z'];
+    const c = gitChanges(dir, ...span);
+    assert.equal(c.committer, 'loop@example.com');
+    assert.deepEqual([c.commits, c.files, c.added, c.removed, c.medianLines, c.largestLines], [4, 4, 14, 0, 3.5, 5]);
+    const sub = gitChanges(path.join(dir, 'sub'), ...span); // a folder inside the repository: its own changes only
+    assert.deepEqual([sub.commits, sub.added], [1, 4]);
+    const plain = tmpDir('cf-report-nogit-');
+    try { assert.equal(gitChanges(plain, ...span), null); } finally { rm(plain); }
+
+    const log = path.join(dir, 'events.jsonl');
+    write(log, sample());
+    const r = { ...analyze((await readSessionEvents([log])).events), changes: c };
+    const md = renderMarkdown(r);
+    assert.match(md, /## Changes\n\n- Commits: 4, 4 file changes, \+14 −0 lines\n- Lines changed per commit \(added plus removed\): median 3\.5, largest 5\n- Diff Reviewer runs in the session per commit counted here: 0\.3/);
+    assert.match(md, /whose committer is loop@example\.com/);
+    assert.match(renderMarkdown({ ...r, changes: { ...c, commits: 0 } }), /No commits by loop@example\.com in this span\./);
+    assert.match(renderMarkdown({ ...r, changes: { ...c, committer: null } }), /from any committer/);
+    assert.match(renderMarkdown({ ...r, changes: { repo: dir, error: 'boom' } }), /## Changes\n\nUnavailable: git failed in `[^`]+`: boom/);
+    assert.doesNotMatch(renderMarkdown({ ...r, changes: null }), /## Changes/);
+
+    // git fails in a repository: the section says why instead of disappearing.
+    fs.writeFileSync(path.join(dir, '.git', 'refs', 'heads', 'broken'), 'deadbeef'.repeat(5) + '\n');
+    const bad = gitChanges(dir, ...span);
+    assert.match(bad.error, /bad object|broken/);
+    assert.match(renderMarkdown({ ...r, changes: bad }), /Unavailable: git failed in/);
+    fs.rmSync(path.join(dir, '.git', 'refs', 'heads', 'broken'));
+    // git cannot run at all: an error too, not "not a repository".
+    assert.ok(gitChanges(dir, ...span, { ...process.env, PATH: path.join(dir, 'no-such-bin'), Path: path.join(dir, 'no-such-bin') })?.error);
+    assert.equal(gitChanges(path.join(dir, '.git'), ...span), null); // inside .git: no work tree
+    assert.ok(gitChanges(path.join(dir, 'missing'), ...span)?.error); // a configured folder that is gone
   } finally { rm(dir); }
 });

@@ -21,7 +21,10 @@ Read `.goal-loop/GOAL.md` and the repository as it is. Write `.goal-loop/PLAN.md
    - **Acceptance criteria**: observable checks a reviewer can run ("`npm test` covers X", "the page shows Y when Z"), not intentions;
    - **Depends on**: earlier issues by their number in the plan;
    - **Size**: small enough for one Builder delegation and one review (about a day of human work or less). Split anything bigger.
-3. **Open questions** for the human, if any. Do not invent requirements the goal does not state; ask.
+3. **Assumptions**: one line each for every place the goal is silent or can be read more than one way and one reading is safe to take: the reading you took, and the one you rejected. The Orchestrator shows these at plan approval, the one point where a wrong reading is cheap to fix.
+4. **Open questions** for the human, only where no reading is safe to take (it would add a requirement the goal does not state, or change its scope).
+
+Plan the simplest thing that meets the goal: no features, settings or layers the goal does not ask for.
 
 The first issue makes the project buildable and testable (skeleton, test runner, the gate command working), so every later issue has a gate.
 

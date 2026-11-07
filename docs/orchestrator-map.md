@@ -98,6 +98,7 @@ The reviewer must be a different model family from the Builder; bootstrap refuse
 | An issue is unclear | Asks the Architect for a verify-first build prompt instead of sending the issue straight to the Builder. |
 | The Builder hits a hard stop | Sends it to the Architect for triage; a decision reserved for the human goes to the human. |
 | Review finds a blocker or a repair regression | Fresh Builder delegation with the exact findings, then a delta review (a full review if a shared interface changed). |
+| Review finds code the issue does not need (size) | Deletes it with the round's other repairs; from round 2 on, only leftovers the change itself made unused are deleted and other size findings go to the follow-up issue. A size-only repair that just removes code the change added runs the focused tests with no further review round. |
 | Review round `maxReviewRounds` ends not ready | Parks the issue (`needs-human` label, comment with open findings and a recommendation) and continues with independent work. |
 | The gate is red | Finds the issue that caused it, repairs, re-reviews, commits, gates again. |
 | Merge policy `human` | Starts the next batch only if it doesn't depend on the unmerged PR; otherwise writes the handoff and waits with a watchdog. |

@@ -34,5 +34,8 @@ Working the issue queue? Then you must be the Orchestrator agent. If you are not
 ## Scope
 
 - Do what the issue asks and no more. Do not refactor neighbouring code, add features or expand the plan on your own.
+- **Write the simplest code that meets the acceptance criteria.** No options, configuration, abstractions or extension points the issue does not ask for, and no error handling for cases that cannot happen. If a much shorter version would behave the same, write that one.
+- **Clean up your own leftovers, and only yours.** Remove the imports, variables, functions and files your change made unused. Leave dead code you did not create; mention it in your report.
+- **Write assumptions down; don't guess silently.** Where the issue or goal can be read more than one way and the choice is neither one of the escalations below nor a Builder hard stop (a design decision such as a new dependency, interface or data format), take the reading that changes least, say which reading you took and why in your report, and carry on.
 - File new issues only under the Orchestrator's filing rules (bounded, de-duplicated, with evidence).
 - Stop and escalate instead of guessing when a step needs: an irreversible or destructive data operation, weaker security or privacy, a breaking change to a public interface without a migration path, spending money, a new paid dependency or license question, a secret or credential, access to a production system, or a change to the goal itself.

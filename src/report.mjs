@@ -18,6 +18,7 @@
 //   quiet      - 5+ minutes between the events the report reads with no tool open and none of
 //                the above: often a stall, but it can be anything the log does not show
 //   orchestrator - everything else: the top-level agent reading, deciding, running tools
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -308,6 +309,53 @@ const offset = (ms) => {
   return `+${Math.floor(m / 60)}:${String(m % 60).padStart(2, '0')}`;
 };
 
+/** Commits from `git log --shortstat --format=@@%H`: one { sha, files, added, removed } each. */
+export function parseShortstat(text) {
+  const commits = [];
+  for (const line of String(text ?? '').split(/\r?\n/)) {
+    if (line.startsWith('@@')) { commits.push({ sha: line.slice(2).trim(), files: 0, added: 0, removed: 0 }); continue; }
+    const c = commits[commits.length - 1];
+    if (!c || !/\bchanged\b/.test(line)) continue;
+    const n = (re) => Number(re.exec(line)?.[1] ?? 0);
+    c.files = n(/(\d+) files? changed/); c.added = n(/(\d+) insertions?\(\+\)/); c.removed = n(/(\d+) deletions?\(-\)/);
+  }
+  return commits;
+}
+
+/** Totals and the lines changed (added plus removed) per commit: median and largest. */
+export function summarizeChanges(commits) {
+  const sum = (k) => commits.reduce((a, c) => a + c[k], 0);
+  const lines = commits.map((c) => c.added + c.removed).sort((a, b) => a - b);
+  const mid = lines.length >> 1;
+  const median = !lines.length ? null : lines.length % 2 ? lines[mid] : (lines[mid - 1] + lines[mid]) / 2;
+  return { commits: commits.length, files: sum('files'), added: sum('added'), removed: sum('removed'), medianLines: median, largestLines: lines.at(-1) ?? null };
+}
+
+/**
+ * What the loop committed in `repo` between two times: commits on any local branch or in the
+ * reflog (so branches deleted after merging still count), without merges, and only those whose
+ * committer is the repository's own user.email (so GitHub's squash-merge commits are left out).
+ * Only changes under `repo` count, so a folder inside a larger repository reports its own.
+ * Null when `repo` is not in a git work tree; `{ repo, error }` when git fails there.
+ * @returns {any}
+ */
+export function gitChanges(repo, startIso, endIso, env = process.env) {
+  // LC_ALL=C: the --shortstat line is parsed by its English words.
+  const git = (...a) => spawnSync('git', ['-C', repo, ...a], { encoding: 'utf8', timeout: 60000, maxBuffer: 64 * 1024 * 1024, windowsHide: true, env: { ...env, LC_ALL: 'C' } });
+  const top = git('rev-parse', '--is-inside-work-tree');
+  if (top.stdout?.trim() === 'false') return null; // a bare repository or a .git folder
+  if (top.stdout?.trim() !== 'true') {
+    if (!top.error && /not a git repository/i.test(top.stderr ?? '')) return null;
+    return { repo, error: firstLine(top.error?.message ?? top.stderr) || `git exited with ${top.status}` };
+  }
+  const email = git('config', 'user.email');
+  const committer = email.status === 0 && email.stdout.trim() ? email.stdout.trim() : null;
+  const who = committer ? ['--fixed-strings', `--committer=<${committer}>`] : [];
+  const res = git('log', '--branches', '--reflog', '--no-merges', ...who, `--since=${startIso}`, `--until=${endIso}`, '--shortstat', '--format=@@%H', '--', '.');
+  if (res.status !== 0) return { repo, error: firstLine(res.error?.message ?? res.stderr) || `git exited with ${res.status}` };
+  return { repo, committer, ...summarizeChanges(parseShortstat(res.stdout)) };
+}
+
 /** Markdown for people: the summary first, then per role, then every subagent run. */
 export function renderMarkdown(r, { source = [] } = {}) {
   const b = r.buckets;
@@ -349,6 +397,22 @@ export function renderMarkdown(r, { source = [] } = {}) {
   L.push('', 'The span ends at the last event in the log: a session still running is reported up to its latest event. "Session stopped" covers only a clean shutdown; a killed host shows as quiet, or as Orchestrator if a tool was running when it died. ' +
     'A stall the watcher ended with a continue counts as waiting for a message, unless a background subagent was running; then it counts as agents working. ' +
     'The count of waits includes waits that a running subagent covered, which add no time to that row.');
+  const c = r.changes;
+  if (c) {
+    L.push('', '## Changes', '');
+    if (c.error) L.push(`Unavailable: git failed in \`${c.repo}\`: ${c.error}`);
+    else if (!c.commits) L.push(`No commits${c.committer ? ` by ${c.committer}` : ''} in this span.`);
+    else {
+      L.push(`- Commits: ${c.commits}, ${c.files} file changes, +${c.added} −${c.removed} lines`);
+      L.push(`- Lines changed per commit (added plus removed): median ${c.medianLines}, largest ${c.largestLines}`);
+      L.push(`- Diff Reviewer runs in the session per commit counted here: ${(r.reviewRuns / c.commits).toFixed(1)}`);
+    }
+    if (!c.error) {
+      L.push('', `From \`git log\` in \`${c.repo}\` (changes under that folder only): commits made in the session's span on any local branch or in the reflog, without merges, ` +
+        (c.committer ? `whose committer is ${c.committer} (the repository's user.email). ` : 'from any committer (the repository has no user.email, so GitHub\'s squash-merge commits count too). ') +
+        'An amended or rebased commit counts again; commits made by hand in the span count too.');
+    }
+  }
   if (source.length) L.push('', `Source: ${source.map((s) => `\`${s}\``).join(', ')}`);
   L.push('');
   return L.join('\n');
@@ -412,6 +476,11 @@ export async function report(cfg, { session = undefined, json = false, out = und
   const files = sessionFiles(cfg, session);
   const { events, unreadable } = await readSessionEvents(files);
   const r = analyze(events);
+  // Lines changed: in the config's repository, or else the session's own workspace folder.
+  // A configured folder that is missing is reported as an error; a vanished workspace folder is skipped.
+  const ws = cfg?.repoFolder ? null : workspaceCwd(path.dirname(files[files.length - 1]));
+  const repo = cfg?.repoFolder ?? (ws && fs.existsSync(ws) ? ws : null);
+  r.changes = repo && events.length ? gitChanges(repo, r.start, r.end) : null;
   const text = json ? `${JSON.stringify({ ...r, unreadableLines: unreadable, source: files }, null, 2)}\n` : renderMarkdown(r, { source: files });
   if (out) fs.writeFileSync(out, text);
   return { text, report: r, files, unreadable };

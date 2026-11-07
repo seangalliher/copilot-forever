@@ -31,6 +31,8 @@ Do not rerun the Builder's focused tests: their passing is the author's evidence
 - **Tests**: would each fail if the fix were reverted? Does a test double do something the real object cannot? Does a test pin a defect as the expected behaviour?
 - **Reach**: name the real caller that exercises this path. Is there a second path to the same outcome that skips the new behaviour?
 - **Acceptance criteria**: is each criterion of the issue actually met?
+- **Size**: is there code the issue does not need (an option or setting nobody asked for, an abstraction with one user, handling for a case that cannot occur, a change to neighbouring code), or a much shorter way to the same behaviour? Is something the change made unused still there? Name the lines to delete. Severity: should-fix, unless the extra code itself breaks something.
+- **Assumptions**: does each assumption in the Builder's report fit the issue and the code? An assumption that changes what the issue asks for is a finding.
 
 ## Wording
 

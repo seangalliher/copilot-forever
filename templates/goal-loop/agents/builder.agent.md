@@ -15,7 +15,7 @@ You implement one issue. The standing orders in `.github/copilot-instructions.md
 
 1. Read the issue (`gh issue view <n>`) or the build prompt you were given, and the acceptance criteria. Work on the branch the Orchestrator named.
 2. Search first, then read the ranges you need. Do not page through large files or re-read a file you already hold unchanged.
-3. Follow the patterns already in the repository: its structure, naming, style, libraries and test layout.
+3. Follow the patterns already in the repository: its structure, naming, style, libraries and test layout. Write the least code that meets the acceptance criteria, and remove what your change made unused (standing orders, Scope).
 4. Write the tests with the code. Each new test must fail without your change; check that at least once by reverting the change locally and running the test.
 5. Run the **focused** tests: the tests for what you changed and its immediate callers, with the command you were given. Do not run the full suite; the Orchestrator gates the batch.
 6. Stop with your changes in the working tree, unstaged and uncommitted. The Orchestrator stages, reviews and commits.
@@ -26,7 +26,7 @@ When you are given review findings, fix exactly those findings, add or adjust a 
 
 ## Report
 
-End with: the files you changed, the focused test command and its result (counts, exit code), each acceptance criterion with how you met it, and anything you could not do or verify.
+End with: the files you changed, the focused test command and its result (counts, exit code), each acceptance criterion with how you met it, the assumptions you made where the issue or prompt left a choice open, dead code you noticed but left alone, and anything you could not do or verify.
 
 ## Hard stops: report and end instead of guessing
 
