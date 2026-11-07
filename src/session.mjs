@@ -47,6 +47,55 @@ export function findSession({ sessionStateDir, repoFolder }, hostPid, table) {
   return found[0] ?? null;
 }
 
+const baseName = (p) => String(p ?? '').split(/[\\/]/).pop().toLowerCase();
+
+/**
+ * Sessions open in this host and in another runtime at once: a session-state folder holding
+ * inuse.<pid>.lock files of two or more live processes, at least one of them under this host.
+ * A lock counts only if its process started before the lock was written (a runtime writes its lock
+ * after it starts), so a stale lock whose PID was reused later does not count. The other holders
+ * must also run the same, known executable as this host's holder. Two runtimes then write one log,
+ * and a trim would replace a file the other runtime still has open. Seen on a real machine: the
+ * Agents window opened another repository's session through this kit's host (localhost:47811)
+ * while that session's own host (localhost:47801) kept running it.
+ * `hosts` (from `code agent ps`) names the host each other holder runs under, where known.
+ * @returns {{ id: string, dir: string, cwd: string|null, here: number[], elsewhere: number[], elsewhereHosts: string[] }[]}
+ */
+export function sharedSessions({ sessionStateDir }, hostPid, table, hosts = []) {
+  let dirs = [];
+  try { dirs = fs.readdirSync(sessionStateDir, { withFileTypes: true }).filter((d) => d.isDirectory()); } catch { return []; }
+  const out = [];
+  for (const d of dirs) {
+    const dir = path.join(sessionStateDir, d.name);
+    let names;
+    try { names = fs.readdirSync(dir); } catch { continue; }
+    const pids = new Set();
+    for (const n of names) {
+      const m = /^inuse\.(\d+)\.lock$/.exec(n);
+      if (!m) continue;
+      const pid = Number(m[1]);
+      const proc = table.get(pid);
+      if (!proc) continue;
+      let written;
+      try { written = fs.statSync(path.join(dir, n)).mtimeMs; } catch { continue; }
+      if (proc.start > written + 5000) continue; // started after the lock was written: a reused PID
+      pids.add(pid);
+    }
+    if (pids.size < 2) continue;
+    const here = [...pids].filter((pid) => isDescendant(table, pid, hostPid));
+    if (!here.length) continue;
+    const exe = baseName(table.get(here[0]).exe);
+    if (!exe) continue;
+    const elsewhere = [...pids].filter((pid) => !here.includes(pid) && baseName(table.get(pid).exe) === exe);
+    if (!elsewhere.length) continue;
+    const elsewhereHosts = [...new Set(elsewhere.flatMap((pid) => hosts
+      .filter((h) => Number(h?.host?.pid) > 0 && isDescendant(table, pid, Number(h.host.pid)))
+      .map((h) => String(h.host.address))))];
+    out.push({ id: d.name, dir, cwd: workspaceCwd(dir), here, elsewhere, elsewhereHosts });
+  }
+  return out;
+}
+
 /** Event types of the last complete lines of a file, reading backwards until `want` types are seen. */
 export function lastTurnEvent(file, maxBytes = 64 * 1048576) {
   const fd = fs.openSync(file, 'r');

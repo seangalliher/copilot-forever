@@ -65,24 +65,33 @@ export function pidAlive(pid) {
   }
 }
 
+/** Seconds in a `ps -o etime` value: `[[dd-]hh:]mm:ss`. NaN if it does not parse. */
+export function etimeSeconds(v) {
+  const m = /^\s*(?:(\d+)-)?(?:(\d+):)?(\d+):(\d+)\s*$/.exec(String(v));
+  if (!m) return NaN;
+  return ((Number(m[1] ?? 0) * 24 + Number(m[2] ?? 0)) * 60 + Number(m[3])) * 60 + Number(m[4]);
+}
+
 /**
- * Snapshot of all processes: Map pid -> { ppid, exe }.
+ * Snapshot of all processes: Map pid -> { ppid, exe, start }. `start` is the start time in ms
+ * (NaN if unknown); `exe` may be empty, e.g. for another user's process.
  * Windows: one CIM query through PowerShell. macOS/Linux: `ps`.
  */
 export async function processTable() {
   const table = new Map();
   if (isWindows) {
-    const ps = 'Get-CimInstance Win32_Process | ForEach-Object { "{0}`t{1}`t{2}" -f $_.ProcessId, $_.ParentProcessId, $_.ExecutablePath }';
+    const ps = 'Get-CimInstance Win32_Process | ForEach-Object { "{0}`t{1}`t{2}`t{3}" -f $_.ProcessId, $_.ParentProcessId, $_.ExecutablePath, $(if ($_.CreationDate) { $_.CreationDate.ToUniversalTime().ToString("o") }) }';
     const r = await run(sys32('WindowsPowerShell\\v1.0\\powershell.exe'), ['-NoProfile', '-NonInteractive', '-Command', ps], { timeoutMs: 60000 });
     for (const line of r.stdout.split(/\r?\n/)) {
-      const [pid, ppid, exe] = line.split('\t');
-      if (/^\d+$/.test(pid ?? '')) table.set(Number(pid), { ppid: Number(ppid), exe: exe || '' });
+      const [pid, ppid, exe, start] = line.split('\t');
+      if (/^\d+$/.test(pid ?? '')) table.set(Number(pid), { ppid: Number(ppid), exe: exe || '', start: start ? Date.parse(start) : NaN });
     }
   } else {
-    const r = await run('ps', ['-A', '-o', 'pid=', '-o', 'ppid=', '-o', 'comm='], { timeoutMs: 30000 });
+    const now = Date.now();
+    const r = await run('ps', ['-A', '-o', 'pid=', '-o', 'ppid=', '-o', 'etime=', '-o', 'comm='], { timeoutMs: 30000 });
     for (const line of r.stdout.split('\n')) {
-      const m = /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line);
-      if (m) table.set(Number(m[1]), { ppid: Number(m[2]), exe: m[3].trim() });
+      const m = /^\s*(\d+)\s+(\d+)\s+(\S+)\s+(.*)$/.exec(line);
+      if (m) table.set(Number(m[1]), { ppid: Number(m[2]), exe: m[4].trim(), start: now - etimeSeconds(m[3]) * 1000 });
     }
   }
   return table;

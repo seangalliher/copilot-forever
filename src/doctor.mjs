@@ -5,7 +5,8 @@ import { agentPs, findStandaloneHost } from './host.mjs';
 import { installedMarker, SCHEDULE_VERSION } from './install.mjs';
 import { isListening, processTable, run } from './proc.mjs';
 import { checkSchema, readEvents } from './schema.mjs';
-import { checkVersions, findSession, readFirstEvent } from './session.mjs';
+import { checkVersions, findSession, readFirstEvent, sharedSessions } from './session.mjs';
+import { sharedAdvice } from './watch.mjs';
 import { findCut } from './trim.mjs';
 import { exists, isWindows, mib } from './util.mjs';
 
@@ -41,8 +42,10 @@ export async function doctor(cfg, log) {
 
   (await isListening(cfg.host.port)) ? pass(`port ${cfg.host.port} listening`) : warn(`port ${cfg.host.port} not listening`);
   let hostInfo = null;
+  let hosts = [];
   try {
-    hostInfo = findStandaloneHost(await agentPs(cfg), cfg.host.port);
+    hosts = await agentPs(cfg);
+    hostInfo = findStandaloneHost(hosts, cfg.host.port);
   } catch (e) {
     fail(e.message);
   }
@@ -54,7 +57,12 @@ export async function doctor(cfg, log) {
     return ok;
   }
   pass(`standalone host pid ${hostInfo.host.pid} at ${hostInfo.host.address}`);
-  const session = findSession(cfg, Number(hostInfo.host.pid), await processTable());
+  const table = await processTable();
+  for (const s of sharedSessions(cfg, Number(hostInfo.host.pid), table, hosts)) {
+    const where = `${s.elsewhere.join(', ')}${s.elsewhereHosts.length ? ` under ${s.elsewhereHosts.join(', ')}` : ''}`;
+    warn(`session ${s.id} (${s.cwd ?? 'unknown folder'}) is open in this host (runtime ${s.here.join(', ')}) and in another runtime (${where}): ${sharedAdvice(cfg, s, `runtime ${where}`)}`);
+  }
+  const session = findSession(cfg, Number(hostInfo.host.pid), table);
   if (!session) {
     warn(`no session for ${cfg.repoFolder} runs under the host`);
     return ok;

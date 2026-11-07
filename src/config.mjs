@@ -196,6 +196,7 @@ export function resolveConfig(raw, baseDir, file = null) {
   cfg.resumeStateFile = path.join(cfg.stateDir, `resume-${cfg.instanceName}.json`);
   cfg.stallStateFile = path.join(cfg.stateDir, `stall-${cfg.instanceName}.json`);
   cfg.staleStateFile = path.join(cfg.stateDir, `stale-${cfg.instanceName}.json`);
+  cfg.sharedStateFile = path.join(cfg.stateDir, `shared-${cfg.instanceName}.json`);
   cfg.installMarker = path.join(cfg.stateDir, `installed-${cfg.instanceName}.json`);
   return cfg;
 }

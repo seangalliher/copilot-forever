@@ -9,10 +9,10 @@ import { activeRepoSessions, agentPs, cleanEnv, findStandaloneHost, hostArgs, ma
 import { launchdPlists, SCHEDULE_VERSION, systemdUnits, uninstall, watchTimeLimitMinutes, windowsTaskXml } from '../src/install.mjs';
 import { addSecret, redact } from '../src/log.mjs';
 import { notifyCommand } from '../src/notify.mjs';
-import { descendants, isDescendant, isListening, pidAlive } from '../src/proc.mjs';
+import { descendants, etimeSeconds, isDescendant, isListening, pidAlive, processTable } from '../src/proc.mjs';
 import { checkSchema, parseEvents } from '../src/schema.mjs';
-import { findSession, lastTurnAsked, lastTurnEvent, notIdleReason, staleHostStatus, workspaceCwd } from '../src/session.mjs';
-import { maybeNotifyStale } from '../src/watch.mjs';
+import { findSession, lastTurnAsked, lastTurnEvent, notIdleReason, sharedSessions, staleHostStatus, workspaceCwd } from '../src/session.mjs';
+import { maybeNotifyShared, maybeNotifyStale, sharedAdvice } from '../src/watch.mjs';
 import { Refusal, uriToPath, vscodeFileUri } from '../src/util.mjs';
 import { BIN, fixtureEvents, fixtureText, freePort, logger, makeSession, rm, SID, tmpDir } from './helpers.mjs';
 
@@ -150,6 +150,76 @@ test('session: finds the repo session whose live lock PID runs under the host', 
     assert.equal(s.runtimePid, 300);
     assert.equal(findSession({ sessionStateDir: stateDir, repoFolder: REPO }, 400, table), null, 'not under this host');
     assert.equal(workspaceCwd(dir), REPO);
+  } finally { rm(d); }
+});
+
+test('session: a session open in this host and in another live runtime is shared', () => {
+  const d = tmpDir();
+  try {
+    const { stateDir, dir } = makeSession(d, 'basic.jsonl', { cwd: REPO });
+    const other = makeSession(d, 'basic.jsonl', { id: 'other-session', cwd: REPO });
+    const lock = (dirName, pid, ageSeconds = 0) => {
+      const f = path.join(dirName, `inuse.${pid}.lock`);
+      fs.writeFileSync(f, '');
+      const t = Date.now() / 1000 - ageSeconds;
+      fs.utimesSync(f, t, t);
+    };
+    const started = Date.now() - 600000; // 10 min ago
+    // host 100 -> runtime 300; another host 500 -> runtime 600; 700 is an unrelated process;
+    // 800 runs the runtime's executable but started after its lock was written (a reused PID);
+    // 900's executable is unknown (another user's process).
+    /** @type {Map<number, any>} */
+    const table = new Map([[100, { ppid: 1 }], [300, { ppid: 100, exe: 'C:\\x\\copilot-runtime.exe', start: started }],
+      [500, { ppid: 1 }], [600, { ppid: 500, exe: '/y/copilot-runtime.exe', start: started }], [700, { ppid: 1, exe: 'notepad.exe', start: started }],
+      [800, { ppid: 1, exe: 'copilot-runtime.exe', start: Date.now() }], [900, { ppid: 1, exe: '', start: started }]]);
+    const cfg = { sessionStateDir: stateDir };
+    lock(dir, 300);
+    assert.deepEqual(sharedSessions(cfg, 100, table), [], 'one holder');
+    lock(dir, 999); // a stale lock: the process is gone
+    lock(dir, 700); // a reused PID running something else
+    lock(dir, 800, 3600); // a lock written an hour ago, its PID reused by a runtime started now
+    lock(dir, 900);
+    assert.deepEqual(sharedSessions(cfg, 100, table), [], 'stale, reused and unknown PIDs do not count');
+    lock(dir, 600);
+    const hosts = [{ host: { pid: 500, address: 'localhost:47811' } }, { host: { address: '\\\\.\\pipe\\x' } }];
+    assert.deepEqual(sharedSessions(cfg, 100, table, hosts), [{ id: SID, dir, cwd: REPO, here: [300], elsewhere: [600], elsewhereHosts: ['localhost:47811'] }]);
+    assert.deepEqual(sharedSessions(cfg, 100, table)[0].elsewhereHosts, [], 'no listing: host unknown');
+    assert.deepEqual(sharedSessions(cfg, 500, table).map((s) => [s.here, s.elsewhere]), [[[600], [300]]], 'seen from the other host');
+    const noExe = new Map(table);
+    noExe.set(300, { ...table.get(300), exe: '' });
+    assert.deepEqual(sharedSessions(cfg, 100, noExe), [], 'this host\'s holder has no known executable');
+    lock(other.dir, 600);
+    assert.deepEqual(sharedSessions(cfg, 400, table), [], 'nothing under this host');
+    assert.deepEqual(sharedSessions({ sessionStateDir: path.join(d, 'missing') }, 100, table), []);
+  } finally { rm(d); }
+});
+
+test('watch: a shared session notifies once per episode, and not in a dry run', async () => {
+  const d = tmpDir();
+  try {
+    const cfg = cfgFor({ stateDir: path.join(d, 'state') });
+    const sent = [];
+    const send = async (title, body) => { sent.push({ title, body }); };
+    const shared = [{ id: SID, dir: d, cwd: REPO, here: [300], elsewhere: [600], elsewhereHosts: ['localhost:47811'] }];
+    assert.equal((await maybeNotifyShared(cfg, logger(), { shared: [], notify: send })).state, 'ok');
+    assert.equal((await maybeNotifyShared(cfg, logger(), { shared, dryRun: true, notify: send })).state, 'would-notify');
+    assert.equal(sent.length, 0);
+    assert.equal((await maybeNotifyShared(cfg, logger(), { shared, notify: send })).state, 'notified');
+    assert.equal(sent[0].title, 'Session open in two hosts');
+    assert.match(sent[0].body, /runtime 600 under localhost:47811/);
+    assert.match(sent[0].body, /trims of it are refused/);
+    assert.match(sent[0].body, /Your session .* Close that copy: .*restart that host/, 'this repository\'s session: close the other copy');
+    const foreign = { ...shared[0], cwd: win ? 'C:\\elsewhere' : '/elsewhere' };
+    const advice = sharedAdvice(cfg, foreign, 'runtime 600 under localhost:47801');
+    assert.match(advice, /The copy in this host is probably the mistake: .*copilot-forever host stop, then host start/, 'another folder\'s session: close the copy here');
+    assert.doesNotMatch(sent[0].body, /copilot-forever host stop/, 'never tells you to stop this host for your own session');
+    const unknown = sharedAdvice(cfg, { ...shared[0], cwd: null }, 'runtime 600');
+    assert.match(unknown, /folder unknown/);
+    assert.doesNotMatch(unknown, /host stop|restart that host/, 'no restart advice when the folder is unknown');
+    assert.equal((await maybeNotifyShared(cfg, logger(), { shared, notify: send })).state, 'already-notified');
+    const again = [{ ...shared[0], elsewhere: [601] }]; // a new runtime: a new episode
+    assert.equal((await maybeNotifyShared(cfg, logger(), { shared: again, notify: send })).state, 'notified');
+    assert.equal(sent.length, 2);
   } finally { rm(d); }
 });
 
@@ -398,4 +468,13 @@ test('notify: per-OS commands escape their text', () => {
   assert.match(script, /<text>a &lt;b&gt; &amp; &apos;c&apos;<\/text>/);  assert.deepEqual(notifyCommand('darwin', 'T "x"', 'B'), ['osascript', ['-e', 'display notification "B" with title "T \\"x\\""']]);
   assert.equal(notifyCommand('linux', 'T', 'B')[0], 'notify-send');
   assert.equal(notifyCommand('aix', 'T', 'B'), null);
+});
+
+test('proc: ps etime values and process start times', async () => {
+  assert.equal(etimeSeconds('05'), NaN);
+  assert.equal(etimeSeconds('01:05'), 65);
+  assert.equal(etimeSeconds('2:01:05'), 7265);
+  assert.equal(etimeSeconds('3-02:01:05'), 3 * 86400 + 7265);
+  const me = (await processTable()).get(process.pid);
+  assert.ok(me && me.start <= Date.now() + 1000 && me.start > Date.now() - 3600000, JSON.stringify(me));
 });

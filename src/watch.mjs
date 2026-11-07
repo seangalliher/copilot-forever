@@ -19,9 +19,9 @@ import { notify } from './notify.mjs';
 import { maybeResume, maybeStallResume } from './resume.mjs';
 import { isListening, pidAlive, processTable } from './proc.mjs';
 import { checkSchema, readEvents } from './schema.mjs';
-import { checkVersions, findSession, notIdleReason, readFirstEvent, staleHostStatus } from './session.mjs';
+import { checkVersions, findSession, notIdleReason, readFirstEvent, sharedSessions, staleHostStatus } from './session.mjs';
 import { findCut, trimSession } from './trim.mjs';
-import { exists, mib, nowIso, readJson, sleep, stampUtc, vscodeFileUri, writeJsonAtomic } from './util.mjs';
+import { exists, mib, nowIso, readJson, samePath, sleep, stampUtc, vscodeFileUri, writeJsonAtomic } from './util.mjs';
 
 /** Take the single-run lock; returns a release function, or null if another live run holds it. */
 export function takeLock(file) {
@@ -89,6 +89,38 @@ function readRequest(cfg, log) {
  * @param {{ dryRun?: boolean, force?: boolean }} opts force: trim on request even if versions are untested
  * @returns {Promise<{ state: string, [k: string]: any }>}
  */
+/**
+ * Notify once per episode when a session is open both in this host and in another runtime (see
+ * `sharedSessions`). The watcher changes nothing about it; a trim of such a session is refused.
+ */
+export async function maybeNotifyShared(cfg, log, { shared, dryRun = false, notify: send }) {
+  if (!shared.length) return { state: 'ok' };
+  const key = shared.map((s) => `${s.id}:${[...s.here, ...s.elsewhere].sort((a, b) => a - b).join(',')}`).sort().join(';');
+  try { if (readJson(cfg.sharedStateFile).key === key) return { state: 'already-notified', shared }; } catch { /* none yet */ }
+  const where = (s) => `runtime ${s.elsewhere.join(', ')}${s.elsewhereHosts?.length ? ` under ${s.elsewhereHosts.join(', ')}` : ''}`;
+  const lines = shared.map((s) => `session ${s.id} (${s.cwd ?? 'unknown folder'}): runtime ${s.here.join(', ')} under this host, ${where(s)} elsewhere`);
+  log.warn(`session open in two runtimes: ${lines.join('; ')}`);
+  if (dryRun) return { state: 'would-notify', shared };
+  writeJsonAtomic(cfg.sharedStateFile, { key, notified_at: nowIso() });
+  await send('Session open in two hosts', `${sharedAdvice(cfg, shared[0], where(shared[0]))}${shared.length > 1 ? ` (${shared.length - 1} more such sessions in the log.)` : ''}`);
+  return { state: 'notified', shared };
+}
+
+/**
+ * Which copy to close. This repository's session belongs to this host, so the other copy is the
+ * mistake; another folder's session belongs to its own host, so the copy in this host is.
+ */
+export function sharedAdvice(cfg, s, where) {
+  const risk = 'Two runtimes writing one log can lose work, and trims of it are refused.';
+  if (!s.cwd) {
+    return `Session ${s.id} (folder unknown) is open in this host (localhost:${cfg.host.port}) and in ${where}. ${risk} Find which chat you opened by mistake and stop any turn in it; check before restarting either host.`;
+  }
+  if (samePath(s.cwd, cfg.repoFolder)) {
+    return `Your session ${s.id} is also open in ${where}. ${risk} Close that copy: stop any turn in its chat, then restart that host.`;
+  }
+  return `Session ${s.id} (${s.cwd ?? 'another folder'}) is open in this host (localhost:${cfg.host.port}) and in ${where}. ${risk} The copy in this host is probably the mistake: stop any turn in its chat, then restart this host (copilot-forever host stop, then host start) while your own session is idle.`;
+}
+
 export async function watchOnce(cfg, log, { dryRun = false, force = false } = {}) {
   const release = dryRun ? () => {} : takeLock(cfg.lockFile);
   if (!release) {
@@ -120,10 +152,17 @@ async function watchInner(cfg, log, { dryRun, force }) {
   }
   const hostPid = Number(hostInfo.host.pid);
   const table = await processTable();
+  let shared;
+  try {
+    shared = await maybeNotifyShared(cfg, log, { shared: sharedSessions(cfg, hostPid, table, hosts), dryRun, notify: (title, body) => notify(cfg, log, title, body) });
+  } catch (e) {
+    log.warn(`shared session check failed: ${e.message}`);
+    shared = { state: 'error' };
+  }
   const session = findSession(cfg, hostPid, table);
   if (!session) {
     if (request || dryRun) log.info(`no session for ${cfg.repoFolder} runs under host ${hostPid}${request ? '; trim requested but nothing done' : ''}`);
-    return { state: 'no-session', hostPid };
+    return { state: 'no-session', hostPid, shared };
   }
 
   // The AHP session URI differs from the Copilot session id. Taken from the host's active listing
@@ -164,7 +203,7 @@ async function watchInner(cfg, log, { dryRun, force }) {
     const resume = await maybeResume(cfg, log, io);
     // A network resume this run already sent a continue (or is waiting on one); check stalls next run.
     const stall = ['resumed', 'resume-failed', 'would-resume'].includes(resume.state) ? { state: 'skipped' } : await maybeStallResume(cfg, log, io);
-    return { state: 'status', status: st, resume, stall, stale };
+    return { state: 'status', status: st, resume, stall, stale, shared };
   }
 
   // ---- trim run ------------------------------------------------------------------------------
@@ -184,7 +223,7 @@ async function watchInner(cfg, log, { dryRun, force }) {
   }
   if (why) {
     log.info(`not idle yet (${why}); will check again next run`);
-    return { state: 'not-idle', why, stale };
+    return { state: 'not-idle', why, stale, shared };
   }
 
   // Safety, before anything is stopped: versions, log layout, and a usable cut point.
@@ -192,7 +231,10 @@ async function watchInner(cfg, log, { dryRun, force }) {
   const ver = await checkVersions(cfg, { sessionStartEvent: readFirstEvent(logFile) });
   for (const n of ver.notes) log.info(n);
   let refusal = null;
-  if (ver.problems.length && !force) {
+  const other = sharedSessions(cfg, hostPid, await processTable(), hosts).find((x) => x.id === session.id);
+  if (other) {
+    refusal = `the session is also open in another runtime (pid ${other.elsewhere.join(', ')}${other.elsewhereHosts.length ? ` under ${other.elsewhereHosts.join(', ')}` : ''}), which still has its log open; close that copy, then request the trim again`;
+  } else if (ver.problems.length && !force) {
     refusal = `untested Copilot version: ${ver.problems.join('; ')} (run \`copilot-forever trim <id> --force\` by hand to accept the risk)`;
   } else {
     try {

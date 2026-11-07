@@ -2,7 +2,7 @@
 // server, synthetic session log). Covers host start, watcher dry-run, a status run and a full
 // trim cycle: stop host, trim, restart host, continue over AHP.
 import assert from 'node:assert/strict';
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { after, before, test } from 'node:test';
@@ -144,6 +144,34 @@ test('watch refuses while the session is busy, then trims at the safe point and 
   const log = fs.readFileSync(path.join(root, 'state', 'logs', 'copilot-forever.log'), 'utf8');
   const token = fs.readFileSync(path.join(root, 'state', 'token.txt'), 'utf8').trim();
   assert.ok(!log.includes(token), 'token never logged');
+});
+
+test('a request for a session also open in another runtime is refused without stopping the host', async () => {
+  // Another runtime, not under the host, running the same executable as the fake runtime (node).
+  const other = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 120000)'], { stdio: 'ignore', windowsHide: true });
+  const otherLock = path.join(sessionDir, `inuse.${other.pid}.lock`);
+  try {
+    fs.writeFileSync(otherLock, String(other.pid));
+    ageLog();
+    const reqFile = path.join(repo, 'logs', 'trim-request.json');
+    fs.writeFileSync(reqFile, JSON.stringify({ requested_at: new Date().toISOString(), session_id: SID }));
+    const before = fs.readFileSync(eventsFile, 'utf8');
+    const hostPid = state().hostPid;
+    const doc = await cli('doctor');
+    assert.match(doc.out, new RegExp(`session ${SID} .* is open in this host .* and in another runtime \\(${other.pid}\\)`));
+    const r = await cli('watch');
+    assert.equal(r.code, 0, r.out);
+    assert.match(r.out, /session open in two runtimes/);
+    assert.match(r.out, new RegExp(`refusing to trim: the session is also open in another runtime \\(pid ${other.pid}\\)`));
+    assert.ok(pidAlive(hostPid), 'host not stopped');
+    assert.equal(fs.readFileSync(eventsFile, 'utf8'), before, 'log untouched');
+    assert.ok(!fs.existsSync(reqFile), 'request archived');
+    const turns = fs.readFileSync(path.join(root, 'received.jsonl'), 'utf8').trim().split('\n');
+    assert.match(JSON.parse(turns[turns.length - 1]).message.text, /did NOT happen \(the session is also open in another runtime/);
+  } finally {
+    other.kill();
+    fs.rmSync(otherLock, { force: true });
+  }
 });
 
 test('a request with nothing safe to trim is refused without stopping the host, and the agent is resumed', async () => {
