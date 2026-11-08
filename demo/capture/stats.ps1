@@ -2,7 +2,7 @@
 #
 #   pwsh demo/capture/stats.ps1 -Repo owner/name [-Since 2026-11-05T09:00:00Z] [-Out stats.md]
 #
-# Counts issues, pull requests, review comments, CI runs and elapsed time from the first issue (or -Since)
+# Counts issues, pull requests, GitHub review comments, CI runs and elapsed time from the first issue (or -Since)
 # to the last merge. Copilot usage isn't available from GitHub's API here: note your AI credits before and
 # after the run and add the difference by hand.
 param(
@@ -47,7 +47,7 @@ $lines = @(
     "| Pull requests | $($prs.Count) ($($merged.Count) merged) |",
     "| Lines added / removed (merged PRs) | $(($merged | Measure-Object additions -Sum).Sum) / $(($merged | Measure-Object deletions -Sum).Sum) |",
     "| Files changed (merged PRs) | $(($merged | Measure-Object changedFiles -Sum).Sum) |",
-    "| PR reviews and comments | $(($prs | ForEach-Object { @($_.reviews).Count + @($_.comments).Count } | Measure-Object -Sum).Sum) |",
+    "| Reviews and comments on GitHub PRs (the Diff Reviewer works in the session: see its runs in the timing report) | $(($prs | ForEach-Object { @($_.reviews).Count + @($_.comments).Count } | Measure-Object -Sum).Sum) |",
     "| CI runs | $($runs.Count) ($(@($runs | Where-Object conclusion -eq 'success').Count) green, $(@($runs | Where-Object conclusion -eq 'failure').Count) failed) |",
     "| $(if ($Since) { '-Since' } else { 'First issue' }) to last merge | $hours hours |",
     "| Copilot usage | (add by hand: AI credits after minus before) |",
