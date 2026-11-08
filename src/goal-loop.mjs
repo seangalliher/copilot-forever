@@ -4,8 +4,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { NPX_REFUSAL } from './install.mjs';
 import { run } from './proc.mjs';
-import { exists, Refusal } from './util.mjs';
+import { codeOnPathHint, exists, inNpxCache, Refusal, samePath } from './util.mjs';
 
 export const KIT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const TEMPLATES = path.join(KIT_ROOT, 'templates', 'goal-loop');
@@ -198,22 +199,22 @@ export function writeFiles(repo, files, log, { dryRun = false, force = false } =
 export async function checkPrerequisites(log) {
   const checks = [
     { name: 'node', cmd: process.execPath, args: ['--version'], required: true },
-    { name: 'git', cmd: 'git', args: ['--version'], required: true },
-    { name: 'gh (GitHub CLI)', cmd: 'gh', args: ['--version'], required: true },
-    { name: 'gh logged in', cmd: 'gh', args: ['auth', 'status'], required: true },
-    { name: 'code (VS Code CLI)', cmd: 'code', args: ['--version'], required: true },
-    { name: 'copilot (Copilot CLI)', cmd: 'copilot', args: ['--version'], required: false },
+    { name: 'git', cmd: 'git', args: ['--version'], required: true, fix: 'install it from https://git-scm.com/downloads' },
+    { name: 'gh (GitHub CLI)', cmd: 'gh', args: ['--version'], required: true, fix: 'install it from https://cli.github.com' },
+    { name: 'gh logged in', cmd: 'gh', args: ['auth', 'status'], required: true, fix: 'run: gh auth login' },
+    { name: 'code (VS Code CLI)', cmd: 'code', args: ['--version'], required: true, fix: codeOnPathHint() },
+    { name: 'copilot (Copilot CLI)', cmd: 'copilot', args: ['--version'], required: false, fix: 'only Ralph mode needs it: https://github.com/github/copilot-cli' },
   ];
   const missing = [];
   for (const c of checks) {
     const r = await run(c.cmd, c.args, { timeoutMs: 30000 });
     const ok = r.code === 0;
     const line = (r.stdout || r.stderr).split(/\r?\n/).find((l) => l.trim())?.trim() ?? '';
-    log.info(`${ok ? 'ok  ' : c.required ? 'MISS' : 'opt '} ${c.name}${ok ? `: ${line.slice(0, 60)}` : ''}`);
+    log.info(`${ok ? 'ok  ' : c.required ? 'MISS' : 'opt '} ${c.name}${ok ? `: ${line.slice(0, 60)}` : c.fix ? ` (to fix: ${c.fix})` : ''}`);
     if (!ok && c.required) missing.push(c.name);
   }
   const major = Number(process.versions.node.split('.')[0]);
-  if (major < 22) missing.push(`node 22+ (this is ${process.versions.node})`);
+  if (major < 22) missing.push(`node 22+ (this is ${process.versions.node}; install it from https://nodejs.org)`);
   return missing;
 }
 
@@ -241,7 +242,7 @@ export function effortRoles(repo, cfg, results, log) {
     const written = action === 'create' || action === 'overwrite';
     const onDisk = written ? names[role] : agentFileName(path.join(repo, rel));
     if (onDisk === names[role]) roles.push(role);
-    else log.warn(`${rel} ${onDisk ? `is named "${onDisk}"` : 'has no name in its frontmatter'}, not "${names[role]}": its effort setting would not apply. Run the bootstrap again with --force to re-render the agents.`);
+    else log.warn(`${rel} ${onDisk ? `is named "${onDisk}"` : 'has no name in its frontmatter'}, not "${names[role]}": its effort setting would not apply. Run setup again with --force to re-render the agents.`);
   }
   return roles;
 }
@@ -304,25 +305,86 @@ export function applyEffortSettings(cfg, log, { dryRun = false, file = copilotSe
   return { changed: true, file, changes };
 }
 
-export function nextSteps(repo, cfg, { linked, started = false }) {
+/**
+ * Protect the repository's default branch on GitHub: every change goes through a pull request,
+ * admins included. The agents push as you, so only an enforced rule stops one pushing to it.
+ * Existing protection is left as it is. Returns 'protected', 'exists', 'would' (dry run) or 'failed'.
+ * gh is the GitHub CLI command; tests pass a fake.
+ * @param {string} repo
+ * @param {any} log
+ * @param {{ dryRun?: boolean, gh?: string[] }} [options]
+ */
+export async function protectDefaultBranch(repo, log, { dryRun = false, gh = ['gh'] } = {}) {
+  const [cmd, ...lead] = gh;
+  const ghRun = (args, input) => run(cmd, [...lead, ...args], { cwd: repo, timeoutMs: 60000, input });
+  const why = (r) => (r.stderr || r.stdout).trim().split(/\r?\n/).pop() ?? '';
+  const plan = (r) => (/upgrade|GitHub Pro/i.test(r.stdout + r.stderr) ? ' (GitHub offers branch protection on private repositories only on paid plans; a public repository has it free)' : '');
+  const view = await ghRun(['repo', 'view', '--json', 'nameWithOwner,defaultBranchRef']);
+  if (view.code !== 0) {
+    log.warn(`no GitHub repository found for ${repo} (${why(view)}); add a GitHub remote, push, and run protect again`);
+    return 'failed';
+  }
+  const { nameWithOwner, defaultBranchRef } = JSON.parse(view.stdout);
+  const branch = defaultBranchRef?.name;
+  if (!branch) {
+    log.warn(`${nameWithOwner} has no default branch yet; push a first commit and run protect again`);
+    return 'failed';
+  }
+  const api = `repos/${nameWithOwner}/branches/${encodeURIComponent(branch)}/protection`;
+  const now = await ghRun(['api', api]);
+  if (now.code === 0) {
+    log.info(`${nameWithOwner}: ${branch} is already protected; left as it is`);
+    return 'exists';
+  }
+  if (!/Branch not protected/i.test(now.stdout + now.stderr)) {
+    log.warn(`cannot read the protection of ${branch} in ${nameWithOwner}: ${why(now)}${plan(now)}`);
+    return 'failed';
+  }
+  if (dryRun) {
+    log.info(`would protect ${branch} in ${nameWithOwner}: pull requests required, admins included`);
+    return 'would';
+  }
+  const rule = { required_status_checks: null, enforce_admins: true, required_pull_request_reviews: { required_approving_review_count: 0 }, restrictions: null };
+  const put = await ghRun(['api', '-X', 'PUT', api, '--input', '-'], JSON.stringify(rule));
+  if (put.code !== 0) {
+    log.warn(`could not protect ${branch} in ${nameWithOwner}: ${why(put)}${plan(put)}`);
+    return 'failed';
+  }
+  log.info(`protected ${branch} in ${nameWithOwner}: changes now need a pull request, admins included. Once CI runs, add its checks as required in the repository's branch settings.`);
+  return 'protected';
+}
+
+/** The command that runs this kit: on PATH, through npx, or by its path in a clone. */
+export function kitCommand({ linked, kitRoot = KIT_ROOT }) {
+  if (inNpxCache(kitRoot)) return 'npx copilot-forever';
+  return linked ? 'copilot-forever' : `node "${path.join(kitRoot, 'bin', 'copilot-forever.mjs')}"`;
+}
+
+export function nextSteps(repo, cfg, { cf, started = false }) {
   const names = agentNames(cfg);
-  const cf = linked ? 'copilot-forever' : `node "${path.join(KIT_ROOT, 'bin', 'copilot-forever.mjs')}"`;
   const conf = '--config .goal-loop/copilot-forever.config.json';
   const port = cfg.keepAlive?.port ?? 47801;
+  // The schedule runs the kit from where it is installed, so it cannot run from the npx cache.
+  const npx = cf.startsWith('npx ');
+  const ka = npx ? 'copilot-forever' : cf;
   const keepAlive = started
     ? '    (done by --start: the watcher is scheduled and the standalone host is running)'
-    : `      ${cf} doctor ${conf}\n      ${cf} install ${conf}\n      ${cf} host start ${conf}`;
+    : `${npx ? '      npm install -g copilot-forever     (the schedule needs an install that stays put)\n' : ''}`
+      + `      ${ka} doctor ${conf}\n      ${ka} install ${conf}\n      ${ka} host start ${conf}`;
   return `
 Next steps (in ${repo}):
 
  1. Write your goal in .goal-loop/GOAL.md (or paste it into the chat in step 6; ${names.orchestrator} saves it there).
  2. Check .goal-loop/config.json: the models (the reviewer must be another model family than the
     builder), gate.command (your full test command) and the caps. After changing models, run the
-    bootstrap again with --force to re-render the agents.
- 3. Commit the scaffolding yourself (stage the files by name):
+    setup again with --force to re-render the agents.
+ 3. Commit the scaffolding yourself (stage the files by name) and push it:
       git add .github/agents .github/copilot-instructions.md .goal-loop
       git commit -m "Add goal-loop agents"
- 4. Make sure the repo has a GitHub remote and you are logged in: gh auth status
+      git push
+ 4. Protect the default branch, so every change reaches it through a pull request, the agents'
+    and yours (they run as you, so only GitHub can stop a push):
+      ${cf} protect --repo "${repo}"
 
  Then pick a mode.
 
@@ -348,7 +410,7 @@ ${keepAlive}
 
 /**
  * The whole bootstrap.
- * @param {{ repo: string, config?: string, dryRun?: boolean, force?: boolean, install?: boolean, link?: boolean, allowSameFamily?: boolean, effort?: boolean, settingsFile?: string, print?: boolean, start?: boolean, log: any }} o
+ * @param {{ repo: string, config?: string, dryRun?: boolean, force?: boolean, install?: boolean, link?: boolean, allowSameFamily?: boolean, effort?: boolean, settingsFile?: string, print?: boolean, start?: boolean, kitRoot?: string, log: any }} o
  */
 export async function bootstrap(o) {
   const { log, dryRun = false } = o;
@@ -356,6 +418,8 @@ export async function bootstrap(o) {
   if (!exists(repo)) throw new Refusal(`${repo} does not exist; create and clone the target repository first`, 2);
   const top = await run('git', ['-C', repo, 'rev-parse', '--show-toplevel'], { timeoutMs: 30000 });
   if (top.code !== 0) throw new Refusal(`${repo} is not a git repository (git init it, or clone it from GitHub)`, 2);
+  const kitRoot = o.kitRoot ?? KIT_ROOT;
+  if (o.start && inNpxCache(kitRoot)) throw new Refusal(NPX_REFUSAL, 2);
 
   let raw = {};
   if (o.config) {
@@ -369,19 +433,25 @@ export async function bootstrap(o) {
   log.info('prerequisites:');
   const missing = await checkPrerequisites(log);
 
+  // Installed by npm (or run by npx): its dependencies are in place and there is nothing to link; the
+  // command is on PATH only for a global install. A clone needs npm ci, and npm link to put it on PATH.
+  const fromNpm = kitRoot.split(/[\\/]/).includes('node_modules');
   let linked = false;
-  if (o.install !== false) {
-    if (!exists(path.join(KIT_ROOT, 'node_modules', '@microsoft', 'agent-host-protocol'))) {
-      log.info(`${dryRun ? 'would run' : 'run'}: npm ci (in ${KIT_ROOT})`);
+  if (fromNpm) {
+    const root = await run('npm', ['root', '-g'], { timeoutMs: 30000 });
+    linked = root.code === 0 && samePath(path.dirname(kitRoot), root.stdout.trim());
+  } else if (o.install !== false) {
+    if (!exists(path.join(kitRoot, 'node_modules', '@microsoft', 'agent-host-protocol'))) {
+      log.info(`${dryRun ? 'would run' : 'run'}: npm ci (in ${kitRoot})`);
       if (!dryRun) {
-        const r = await run('npm', ['ci', '--no-fund', '--no-audit'], { cwd: KIT_ROOT, timeoutMs: 600000 });
+        const r = await run('npm', ['ci', '--no-fund', '--no-audit'], { cwd: kitRoot, timeoutMs: 600000 });
         if (r.code !== 0) throw new Error(`npm ci failed: ${(r.stderr || r.stdout).trim().slice(-500)}`);
       }
     }
     if (o.link !== false) {
       log.info(`${dryRun ? 'would run' : 'run'}: npm link (puts copilot-forever on PATH)`);
       if (!dryRun) {
-        const r = await run('npm', ['link', '--no-fund', '--no-audit'], { cwd: KIT_ROOT, timeoutMs: 300000 });
+        const r = await run('npm', ['link', '--no-fund', '--no-audit'], { cwd: kitRoot, timeoutMs: 300000 });
         linked = r.code === 0;
         if (!linked) log.warn(`npm link failed; use node bin/copilot-forever.mjs instead (${(r.stderr || r.stdout).trim().slice(-200)})`);
       } else linked = true;
@@ -403,7 +473,7 @@ export async function bootstrap(o) {
     await install(ka, log, { dryRun });
     await startHost(ka, log, { dryRun, viaService: false });
   }
-  const steps = nextSteps(repo, cfg, { linked, started: !!o.start });
+  const steps = nextSteps(repo, cfg, { cf: kitCommand({ linked, kitRoot }), started: !!o.start });
   if (o.print !== false) process.stdout.write(steps);
   return { cfg, results, missing, steps };
 }

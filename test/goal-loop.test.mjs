@@ -5,7 +5,9 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { resolveConfig } from '../src/config.mjs';
 import { orchestratorAgent } from '../src/ralph.mjs';
-import { agentFileName, agentNames, applyEffortSettings, bootstrap, modelFamily, plannedFiles, render, resolveGoalLoopConfig, TEMPLATES } from '../src/goal-loop.mjs';
+import { agentFileName, agentNames, applyEffortSettings, bootstrap, kitCommand, modelFamily, nextSteps, plannedFiles, protectDefaultBranch, render, resolveGoalLoopConfig, TEMPLATES } from '../src/goal-loop.mjs';
+import { install } from '../src/install.mjs';
+import { inNpxCache } from '../src/util.mjs';
 import { ROOT, logger, rm, tmpDir } from './helpers.mjs';
 
 const GATE = path.join(TEMPLATES, 'gate.mjs');
@@ -362,5 +364,123 @@ test('bootstrap --start --dry-run shows the schedule and host start, and changes
     assert.match(r.steps, /done by --start/);
     assert.match(r.steps, /loop --mode ralph/);
     assert.deepEqual(fs.readdirSync(d).filter((n) => n !== '.git'), []);
+  } finally { rm(d); }
+});
+
+// ---- npm install, setup and protect ------------------------------------------------------------
+
+const FAKE_GH = path.join(ROOT, 'test', 'fake-gh.mjs');
+
+/** Run protectDefaultBranch against the fake gh with this state; returns the result, the log and the state after. */
+async function protect(state, o = {}) {
+  const d = tmpDir('cf-protect-');
+  try {
+    const file = path.join(d, 'gh-state.json');
+    fs.writeFileSync(file, JSON.stringify(state));
+    const log = logger();
+    const r = await protectDefaultBranch(d, log, { gh: [process.execPath, FAKE_GH, '--state', file], ...o });
+    return { r, text: log.lines.join('\n'), after: JSON.parse(fs.readFileSync(file, 'utf8')) };
+  } finally { rm(d); }
+}
+
+test('protect: an unprotected default branch gets a pull-request rule that binds admins', async () => {
+  const { r, text, after } = await protect({ repo: 'me/app', branch: 'main' });
+  assert.equal(r, 'protected');
+  assert.equal(after.put.path, 'repos/me/app/branches/main/protection');
+  assert.deepEqual(after.put.body, { required_status_checks: null, enforce_admins: true, required_pull_request_reviews: { required_approving_review_count: 0 }, restrictions: null });
+  assert.match(text, /protected main in me\/app/);
+});
+
+test('protect: existing protection is kept; a dry run changes nothing', async () => {
+  const kept = await protect({ repo: 'me/app', branch: 'main', protected: true });
+  assert.equal(kept.r, 'exists');
+  assert.equal(kept.after.put, undefined);
+  const dry = await protect({ repo: 'me/app', branch: 'main' }, { dryRun: true });
+  assert.equal(dry.r, 'would');
+  assert.equal(dry.after.put, undefined);
+});
+
+test('protect: no remote, no default branch, an unreadable rule and a plan without protection all fail with a reason', async () => {
+  const none = await protect({});
+  assert.equal(none.r, 'failed');
+  assert.match(none.text, /no GitHub repository found.*no git remotes found/);
+  const empty = await protect({ repo: 'me/app' });
+  assert.equal(empty.r, 'failed');
+  assert.match(empty.text, /no default branch yet/);
+  const unreadable = await protect({ repo: 'me/app', branch: 'main', readError: 'Not Found' });
+  assert.equal(unreadable.r, 'failed');
+  assert.equal(unreadable.after.put, undefined);
+  assert.match(unreadable.text, /cannot read the protection of main.*Not Found/);
+  const paid = await protect({ repo: 'me/app', branch: 'main', putError: 'Upgrade to GitHub Pro or make this repository public to enable this feature.' });
+  assert.equal(paid.r, 'failed');
+  assert.match(paid.text, /paid plans; a public repository has it free/);
+});
+
+test('npm installs: the kit command, the next steps and the npx cache', async () => {
+  const npxRoot = path.join(path.sep, 'cache', '_npx', 'abc', 'node_modules', 'copilot-forever');
+  assert.equal(inNpxCache(npxRoot), true);
+  assert.equal(inNpxCache(ROOT), false);
+  assert.equal(kitCommand({ linked: true }), 'copilot-forever');
+  assert.match(kitCommand({ linked: false }), /^node ".*copilot-forever\.mjs"$/);
+  assert.equal(kitCommand({ linked: true, kitRoot: npxRoot }), 'npx copilot-forever');
+  const cfg = resolveGoalLoopConfig({});
+  const viaNpx = nextSteps('/r', cfg, { cf: 'npx copilot-forever' });
+  assert.match(viaNpx, /npx copilot-forever protect --repo "\/r"/);
+  assert.match(viaNpx, /npm install -g copilot-forever/);
+  assert.match(viaNpx, /^ {6}copilot-forever install --config/m);
+  assert.doesNotMatch(viaNpx, /npx copilot-forever install/);
+  assert.doesNotMatch(nextSteps('/r', cfg, { cf: 'copilot-forever' }), /npm install -g/);
+  const dir = tmpDir('cf-npx-');
+  try {
+    await assert.rejects(install({ configFile: path.join(dir, 'c.json') }, logger(), { dryRun: true, bin: path.join(npxRoot, 'bin', 'copilot-forever.mjs') }), /npx cache.*npm install -g copilot-forever/);
+  } finally { rm(dir); }
+});
+
+test('setup from the command line: defaults to this folder and takes goal-loop options', () => {
+  const { d } = gitRepo();
+  try {
+    const r = spawnSync(process.execPath, [path.join(ROOT, 'bin', 'copilot-forever.mjs'), 'setup', '--dry-run', '--no-install', '--no-effort'], { cwd: d, encoding: 'utf8' });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /setup: .*would create .*orchestrator\.agent\.md/s);
+    assert.match(r.stdout, /protect --repo/);
+    assert.deepEqual(fs.readdirSync(d).filter((n) => n !== '.git'), []);
+  } finally { rm(d); }
+});
+
+test('protect: a plan without protection is explained when reading the rule fails too', async () => {
+  const r = await protect({ repo: 'me/private', branch: 'main', readError: 'Upgrade to GitHub Pro or make this repository public to enable this feature.' });
+  assert.equal(r.r, 'failed');
+  assert.match(r.text, /paid plans/);
+});
+
+test('bootstrap from an npm install: no npm ci or link, and the printed command matches the install', async () => {
+  const { d } = gitRepo();
+  try {
+    const local = path.join(d, 'project', 'node_modules', 'copilot-forever');
+    const log = logger();
+    const r = await bootstrap({ repo: d, dryRun: true, kitRoot: local, effort: false, print: false, log });
+    assert.doesNotMatch(log.lines.join('\n'), /npm (ci|link)/);
+    // Not a global install, so the command is not on PATH: the steps name the file.
+    assert.ok(r.steps.includes(`node "${path.join(local, 'bin', 'copilot-forever.mjs')}" protect`), r.steps);
+    const npx = path.join(d, '_npx', 'abc', 'node_modules', 'copilot-forever');
+    assert.match((await bootstrap({ repo: d, dryRun: true, kitRoot: npx, effort: false, print: false, log: logger() })).steps, /npx copilot-forever protect/);
+    await assert.rejects(bootstrap({ repo: d, dryRun: true, kitRoot: npx, start: true, effort: false, print: false, log: logger() }), /npx cache/);
+    assert.deepEqual(fs.readdirSync(d).filter((n) => n !== '.git'), []);
+  } finally { rm(d); }
+});
+
+test('npm installs: a global install prints the plain command; a local one warns when scheduling', async () => {
+  const root = execFileSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['root', '-g'], { encoding: 'utf8', shell: process.platform === 'win32' }).trim();
+  const { d } = gitRepo();
+  try {
+    const r = await bootstrap({ repo: d, dryRun: true, kitRoot: path.join(root, 'copilot-forever'), effort: false, print: false, log: logger() });
+    assert.match(r.steps, /^ {6}copilot-forever protect --repo/m);
+    const cfgFile = path.join(d, 'c.json');
+    const local = logger();
+    await assert.rejects(install({ configFile: cfgFile, stateDir: d, instanceName: 't' }, local, { dryRun: true, platform: 'aix', bin: path.join(d, 'node_modules', 'copilot-forever', 'bin', 'copilot-forever.mjs') }), /unsupported platform aix/);
+    assert.match(local.lines.join('\n'), /a project's node_modules/);
+    const global = logger();
+    await assert.rejects(install({ configFile: cfgFile, stateDir: d, instanceName: 't' }, global, { dryRun: true, platform: 'aix', bin: path.join(root, 'copilot-forever', 'bin', 'copilot-forever.mjs') }), /unsupported platform aix/);
+    assert.doesNotMatch(global.lines.join('\n'), /a project's node_modules/);
   } finally { rm(d); }
 });

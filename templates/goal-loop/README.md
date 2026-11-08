@@ -23,7 +23,7 @@ flowchart TD
   V --> O
 ```
 
-The [Orchestrator map](../../docs/orchestrator-map.md) has the full picture: one batch step by step, the roles, every decision point, where state lives and where a person comes in.
+The [Orchestrator map](https://github.com/seangalliher/copilot-forever/blob/main/docs/orchestrator-map.md) has the full picture: one batch step by step, the roles, every decision point, where state lives and where a person comes in.
 
 ## What gets installed in your repository
 
@@ -45,25 +45,30 @@ The [Orchestrator map](../../docs/orchestrator-map.md) has the full picture: one
 
 Prerequisites: Node 22+, Git, the GitHub CLI logged in (`gh auth login`), VS Code stable with `code` on PATH, GitHub Copilot. The target must be a Git repository with a GitHub remote and at least one commit.
 
-One command clones the kit, installs it and renders the loop into your repository:
+Install the kit from npm, then run `setup` in your repository's folder:
 
 ```bash
-git clone https://github.com/seangalliher/copilot-forever.git && node copilot-forever/bootstrap.mjs --repo path/to/your-repo
+npm install -g copilot-forever
 ```
 
-Bootstrap checks the tools, runs `npm ci` and `npm link` in the kit, writes the files above (skipping any that exist; `--force` re-renders them, `GOAL.md` is never overwritten), and prints the remaining manual steps:
+```bash
+copilot-forever setup
+```
+
+Setup checks the tools and says how to fix any that are missing. It then writes the files above, skipping any that already exist (`--force` re-renders them; `GOAL.md` is never overwritten), and prints the remaining steps:
 
 1. Write the goal in `.goal-loop/GOAL.md`.
-2. Check `.goal-loop/config.json` (models, `gate.command`, caps). After changing models, run bootstrap again with `--force`.
-3. Commit the scaffolding yourself.
-4. Start the keep-alive layer: `copilot-forever doctor`, `install`, `host start`, each with `--config .goal-loop/copilot-forever.config.json`.
-5. Add the standalone host to VS Code's `chat.remoteAgentHosts` setting (address `localhost:<port>`, token from `~/.copilot-forever/token.txt`).
-6. In the Agents window, start a session on that host with the **Goal Orchestrator** agent, set the effort in the chat's model picker to `effort.orchestrator` (High by default), and send `start` (or paste the goal).
-7. Reply `APPROVE PLAN` when the plan is right.
+2. Check `.goal-loop/config.json` (models, `gate.command`, caps). After changing models, run setup again with `--force`.
+3. Commit the scaffolding yourself and push it.
+4. Protect the default branch: `copilot-forever protect`. GitHub then requires a pull request for every change to it, admins included. The agents push as you, so only GitHub can stop one pushing straight to it. On a private repository this needs a paid GitHub plan; public repositories get it free.
+5. Start the keep-alive layer: `copilot-forever doctor`, `install`, `host start`, each with `--config .goal-loop/copilot-forever.config.json`.
+6. Add the standalone host to VS Code's `chat.remoteAgentHosts` setting (address `localhost:<port>`, token from `~/.copilot-forever/token.txt`).
+7. In the Agents window, start a session on that host with the **Goal Orchestrator** agent, set the effort in the chat's model picker to `effort.orchestrator` (High by default), and send `start` (or paste the goal).
+8. Reply `APPROVE PLAN` when the plan is right.
 
-Steps 4 to 7 are the persistent session. `bootstrap.mjs --start` does step 4 for you (it schedules the watcher and starts the host). For [Ralph mode](#ralph-mode), skip steps 4 to 7 and run `copilot-forever loop --mode ralph` instead.
+Steps 5 to 8 are the persistent session. `setup --start` does step 5 for you (it schedules the watcher and starts the host). For [Ralph mode](#ralph-mode), skip steps 5 to 8 and run `copilot-forever loop --mode ralph` instead.
 
-Preview everything first with `--dry-run`, which writes nothing. The same bootstrap is available as `copilot-forever goal-loop --repo <path> [--goal-config <file>]` once the kit is installed.
+Preview everything first with `--dry-run`, which writes nothing. `npx copilot-forever setup` also works without installing anything, except for `--start` and the keep-alive schedule: the schedule runs the kit from where it is installed, so it needs `npm install -g`. From a clone, `node copilot-forever/bootstrap.mjs --repo path/to/your-repo` does the same as setup, plus `npm ci` and `npm link` in the clone. `copilot-forever goal-loop --repo <path>` is the older name for setup.
 
 ## Configuration (`.goal-loop/config.json`)
 
@@ -197,4 +202,4 @@ It is distilled from a loop that ran a large project for months; the parts that 
 
 ## Try it
 
-[The LoopBoard demo](../../demo/README.md) builds a local-first kanban board from an empty repository in a few hours of loop time, in either mode.
+[The LoopBoard demo](https://github.com/seangalliher/copilot-forever/blob/main/demo/README.md) builds a local-first kanban board from an empty repository in a few hours of loop time, in either mode.

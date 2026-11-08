@@ -4,22 +4,28 @@
 
 By **Sean Galliher**. MIT licensed.
 
-> **Headline demo: [LoopBoard](demo/README.md).** A local-first kanban board built from an empty repository (`seangalliher/loopboard`) in a few hours of loop time. The only human input is the goal and one plan approval. The [video script](demo/VIDEO-SCRIPT.md) walks through the whole solution.
+> **Headline demo: [LoopBoard](https://github.com/seangalliher/copilot-forever/blob/main/demo/README.md).** A local-first kanban board built from an empty repository (`seangalliher/loopboard`) in a few hours of loop time. The only human input is the goal and one plan approval. The [video script](https://github.com/seangalliher/copilot-forever/blob/main/demo/VIDEO-SCRIPT.md) walks through the whole solution.
 
 The core is the **agent team**: an Architect that plans and files issues, a Builder, a Diff Reviewer on a different model family, and an Orchestrator with review rounds and one receipted test gate per batch. It runs in either of two modes (see [Persistent session or Ralph loop?](#persistent-session-or-ralph-loop)). The repository has two layers; use the first on its own, or both together:
 
 | Layer | What it does | Where |
 |---|---|---|
 | **Keep-alive kit** | Keeps **one** long-lived Copilot agent session running for days: a standalone VS Code agent host that survives editor restarts, automatic `events.jsonl` trims at safe points the agent chooses, followed by an automatic continue, and an automatic continue after a network drop. | this README, `bin/`, `src/` |
-| **Goal loop** | Four Copilot custom agents (Orchestrator, Architect, Builder, Diff Reviewer), shared standing orders, a receipted test gate and a handoff file, with safe defaults: plan approval, caps, a STOP file, PRs only. Runs as a persistent session (on the keep-alive kit) or as a Ralph loop (`copilot-forever loop --mode ralph`, no kit needed). | [templates/goal-loop](templates/goal-loop/README.md), [Orchestrator map](docs/orchestrator-map.md) |
+| **Goal loop** | Four Copilot custom agents (Orchestrator, Architect, Builder, Diff Reviewer), shared standing orders, a receipted test gate and a handoff file, with safe defaults: plan approval, caps, a STOP file, PRs only. Runs as a persistent session (on the keep-alive kit) or as a Ralph loop (`copilot-forever loop --mode ralph`, no kit needed). | [templates/goal-loop](templates/goal-loop/README.md), [Orchestrator map](https://github.com/seangalliher/copilot-forever/blob/main/docs/orchestrator-map.md) |
 
-On a new machine, one command clones the kit, installs it, and renders the goal loop into your repository:
+To set it up, install it from npm and run `setup` in your repository's folder:
 
 ```bash
-git clone https://github.com/seangalliher/copilot-forever.git && node copilot-forever/bootstrap.mjs --repo path/to/your-repo
+npm install -g copilot-forever
 ```
 
-The rest of this README covers the keep-alive kit. The goal loop is documented in [templates/goal-loop/README.md](templates/goal-loop/README.md), and the [Orchestrator map](docs/orchestrator-map.md) shows how it works end to end: every phase, role, decision point and handoff, with diagrams.
+```bash
+copilot-forever setup
+```
+
+`setup` checks your tools and says how to fix any that are missing. It adds the agents and the loop's files to the repository, then prints the remaining steps in order. One of them is `copilot-forever protect`, which makes GitHub require a pull request for every change to your default branch. To look first without installing, run `npx copilot-forever setup --dry-run`, which changes nothing. To work from a clone instead: `git clone https://github.com/seangalliher/copilot-forever.git && node copilot-forever/bootstrap.mjs --repo path/to/your-repo`.
+
+The rest of this README covers the keep-alive kit. The goal loop is documented in [templates/goal-loop/README.md](templates/goal-loop/README.md), and the [Orchestrator map](https://github.com/seangalliher/copilot-forever/blob/main/docs/orchestrator-map.md) shows how it works end to end: every phase, role, decision point and handoff, with diagrams.
 
 ## The keep-alive kit
 
@@ -29,7 +35,7 @@ It does three jobs:
 2. **Keeps the session's event log small enough to resume.** At a safe point the agent chooses itself, a watcher stops the host, trims `events.jsonl` to the latest successful compaction (archiving the full log first), restarts the host, and tells the agent to continue over the open [Agent Host Protocol](https://github.com/microsoft/agent-host-protocol).
 3. **Resumes the session when it stops on its own.** When a turn dies on a network error (DNS, connection refused, a timeout, a 5xx from the model API), Copilot retries for a few seconds and then ends the turn, and the session sits idle until someone types. The watcher notices, waits until the model API answers again, and sends a continue. It also continues a session that ended its turn to wait on background work and was never woken. See [Network resume](#network-resume) and [Stall resume](#stall-resume).
 
-> **Status (2026-11-07).** Proven on a real session on Windows: the kit trimmed a goal-loop session's log at a safe point (13 MiB to 0.6 MiB) and resumed it with no one at the keyboard. The goal loop has merged three batches of a real app (six issues, three pull requests, every change reviewed and gated) in a private rehearsal of the [LoopBoard](demo/README.md) demo. Not yet seen live: network resume (tested on a copy of a real failed log, not yet on a live network drop) and stall resume (tested on synthetic logs against a fake host). If either continue fails, the notification asks you to send "continue" by hand, and the session is intact either way. CI runs the tests on Windows, macOS and Ubuntu; real runs so far are on Windows only.
+> **Status (2026-11-07).** Proven on a real session on Windows: the kit trimmed a goal-loop session's log at a safe point (13 MiB to 0.6 MiB) and resumed it with no one at the keyboard. The goal loop has merged three batches of a real app (six issues, three pull requests, every change reviewed and gated) in a private rehearsal of the [LoopBoard](https://github.com/seangalliher/copilot-forever/blob/main/demo/README.md) demo. Not yet seen live: network resume (tested on a copy of a real failed log, not yet on a live network drop) and stall resume (tested on synthetic logs against a fake host). If either continue fails, the notification asks you to send "continue" by hand, and the session is intact either way. CI runs the tests on Windows, macOS and Ubuntu; real runs so far are on Windows only.
 
 ## The problem
 
@@ -128,17 +134,13 @@ This came from a real run: a DNS failure at 09:34 stopped an orchestrator that t
 
 Requirements: Node 22 or newer (the built-in WebSocket is used), VS Code stable with the `code` CLI on PATH, and Copilot in VS Code's Agents window. The Copilot CLI is optional; if it is installed, its version is checked.
 
-Clone this repository and install it as a command:
+Install it as a command:
 
 ```bash
-git clone https://github.com/seangalliher/copilot-forever.git
+npm install -g copilot-forever
 ```
 
-```bash
-cd copilot-forever && npm ci && npm link
-```
-
-(Without `npm link`, use `node bin/copilot-forever.mjs` wherever `copilot-forever` appears below. Keep the clone where it is: the scheduled tasks run it from there.)
+The scheduled tasks run the kit from where npm installed it, so `npx` alone is not enough for this part: `install` refuses to run from the npx cache. To work from a clone instead, run `npm ci && npm link` in it, and keep the clone where it is. Without `npm link`, use `node bin/copilot-forever.mjs` wherever `copilot-forever` appears below.
 
 **1. Configure.** Run this in the folder where you want the config file to live:
 

@@ -8,6 +8,16 @@ export const isWindows = process.platform === 'win32';
 /** Absolute path of a Windows system tool, so a same-named tool earlier on PATH (Git's whoami) is not used. */
 export const sys32 = (exe) => path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', exe);
 
+/** How to put VS Code's `code` command on PATH on this platform. */
+export function codeOnPathHint(platform = process.platform) {
+  if (platform === 'win32') return 'run the VS Code installer again with "Add to PATH" ticked, then open a new terminal';
+  if (platform === 'darwin') return 'in VS Code, run the command "Shell Command: Install \'code\' command in PATH", then open a new terminal';
+  return 'install VS Code from its .deb or .rpm package (it puts code on PATH), then open a new terminal';
+}
+
+/** True when a path is inside npx's cache, which npm may clear at any time. */
+export const inNpxCache = (p) => p.split(/[\\/]/).includes('_npx');
+
 /** Expand a leading `~` to the home directory. */
 export function expandHome(p) {
   if (typeof p !== 'string') return p;

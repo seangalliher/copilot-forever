@@ -18,6 +18,9 @@ const { Refusal, exists, readJson, vscodeFileUri } = await import('../src/util.m
 const HELP = `copilot-forever <command> [options]
 
 Commands
+  setup [--repo <folder>]     Set up the goal loop in a repository (default: this folder) and print the next
+                              steps; takes goal-loop's options
+  protect [--repo <folder>]   Require pull requests for the repository's default branch on GitHub, admins included
   init --repo <folder>        Write ${CONFIG_NAME} (here, or at --config) and create the token file
   doctor                      Check config, tools, versions, host, session and log layout (read-only)
   host start [--foreground]   Start the standalone agent host on localhost:<port> (no-op if listening)
@@ -88,12 +91,17 @@ async function main() {
     return 0;
   }
   if (cmd === 'init') return init();
-  if (cmd === 'goal-loop') {
-    if (!o.repo) throw new Refusal('usage: copilot-forever goal-loop --repo <folder> [--goal-config <file>] [--dry-run] [--force] [--no-install] [--no-effort]', 2);
+  if (cmd === 'goal-loop' || cmd === 'setup') {
+    if (!o.repo && cmd === 'goal-loop') throw new Refusal('usage: copilot-forever goal-loop --repo <folder> [--goal-config <file>] [--dry-run] [--force] [--no-install] [--no-effort]', 2);
     const { bootstrap } = await import('../src/goal-loop.mjs');
-    await bootstrap({ repo: o.repo, config: o['goal-config'], dryRun, force: o.force, install: !o['no-install'], link: !o['no-link'],
-      allowSameFamily: o['allow-same-family'], effort: !o['no-effort'], start: o.start, log: new Logger({ dryRun, prefix: 'goal-loop: ' }) });
+    await bootstrap({ repo: o.repo ?? '.', config: o['goal-config'], dryRun, force: o.force, install: !o['no-install'], link: !o['no-link'],
+      allowSameFamily: o['allow-same-family'], effort: !o['no-effort'], start: o.start, log: new Logger({ dryRun, prefix: `${cmd}: ` }) });
     return 0;
+  }
+  if (cmd === 'protect') {
+    const { protectDefaultBranch } = await import('../src/goal-loop.mjs');
+    const r = await protectDefaultBranch(path.resolve(o.repo ?? '.'), new Logger({ dryRun, prefix: 'protect: ' }), { dryRun });
+    return r === 'failed' ? 1 : 0;
   }
   if (cmd === 'loop') {
     const ralph = await import('../src/ralph.mjs');

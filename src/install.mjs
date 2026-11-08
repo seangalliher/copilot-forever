@@ -8,9 +8,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isListening, run } from './proc.mjs';
-import { exists, readJson, Refusal, sys32, writeJsonAtomic } from './util.mjs';
+import { exists, inNpxCache, readJson, Refusal, samePath, sys32, writeJsonAtomic } from './util.mjs';
 
 export const BIN = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'copilot-forever.mjs');
+
+export const NPX_REFUSAL = 'copilot-forever is running from the npx cache, which npm can clear, so a schedule pointing at it would break. '
+  + 'Install it for good with `npm install -g copilot-forever`, then run the same command with `copilot-forever` instead of `npx copilot-forever`.';
 
 /** Minutes a watcher run may take, with margin: idle recheck, host stop/start and continue retries. */
 export function watchTimeLimitMinutes(cfg) {
@@ -176,8 +179,17 @@ function writeFile(log, dryRun, file, content, encoding = 'utf8') {
 }
 
 /** Install the host service and the watcher schedule for this platform. */
-export async function install(cfg, log, { dryRun = false, platform = process.platform } = {}) {
+export async function install(cfg, log, { dryRun = false, platform = process.platform, bin = BIN } = {}) {
   if (!cfg.configFile) throw new Refusal('install needs a config file on disk (pass --config)', 2);
+  if (inNpxCache(bin)) throw new Refusal(NPX_REFUSAL, 2);
+  // A project's own node_modules (npm install without -g) is cleared by a clean install or a prune.
+  const kit = path.dirname(path.dirname(bin));
+  if (kit.split(/[\\/]/).includes('node_modules')) {
+    const root = await run('npm', ['root', '-g'], { timeoutMs: 30000 });
+    if (!(root.code === 0 && samePath(path.dirname(kit), root.stdout.trim()))) {
+      log.warn(`the schedule will run the kit from ${kit}, a project's node_modules, which a clean install or prune removes; npm install -g copilot-forever keeps it in place`);
+    }
+  }
   const node = process.execPath;
   const n = names(cfg);
   const pathEnv = process.env.PATH || '/usr/local/bin:/usr/bin:/bin';

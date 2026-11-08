@@ -8,7 +8,7 @@ import { checkSchema, readEvents } from './schema.mjs';
 import { checkVersions, findSession, readFirstEvent, sharedSessions } from './session.mjs';
 import { sharedAdvice } from './watch.mjs';
 import { findCut } from './trim.mjs';
-import { exists, isWindows, mib } from './util.mjs';
+import { codeOnPathHint, exists, isWindows, mib } from './util.mjs';
 
 export async function doctor(cfg, log) {
   let ok = true;
@@ -18,16 +18,16 @@ export async function doctor(cfg, log) {
 
   pass(`config ${cfg.configFile}`);
   pass(`node ${process.versions.node}`);
-  exists(cfg.repoFolder) ? pass(`repo folder ${cfg.repoFolder}`) : fail(`repo folder ${cfg.repoFolder} does not exist`);
+  exists(cfg.repoFolder) ? pass(`repo folder ${cfg.repoFolder}`) : fail(`repo folder ${cfg.repoFolder} does not exist; set repoFolder in ${cfg.configFile}`);
   if (exists(cfg.agentFile)) {
     const text = fs.readFileSync(cfg.agentFile, 'utf8');
     const rel = path.relative(cfg.repoFolder, cfg.files.request).replace(/\\/g, '/');
     text.includes(rel) ? pass(`agent file ${cfg.agentFile} mentions ${rel}`) : warn(`agent file ${cfg.agentFile} does not mention ${rel}; paste \`copilot-forever snippet\` into it`);
-  } else warn(`agent file ${cfg.agentFile} not found`);
+  } else warn(`agent file ${cfg.agentFile} not found; set agentFile in ${cfg.configFile}`);
 
   const [code, ...lead] = cfg.host.codeCommand;
   const v = await run(code, [...lead, '--version'], { timeoutMs: 30000 });
-  v.code === 0 ? pass(`VS Code CLI (${path.basename(code)}) ${v.stdout.split(/\r?\n/)[0]}`) : fail(`\`${code} --version\` failed; set host.codeCommand`);
+  v.code === 0 ? pass(`VS Code CLI (${path.basename(code)}) ${v.stdout.split(/\r?\n/)[0]}`) : fail(`\`${code} --version\` failed: to put VS Code's code command on PATH, ${codeOnPathHint()}; or set host.codeCommand`);
 
   if (exists(cfg.host.tokenFile)) {
     if (!isWindows && (fs.statSync(cfg.host.tokenFile).mode & 0o077)) fail(`token file ${cfg.host.tokenFile} is readable by others (chmod 600)`);
@@ -40,7 +40,7 @@ export async function doctor(cfg, log) {
     warn(`installed by an older kit (schedule ${marker.schedule ?? 1}, current ${SCHEDULE_VERSION}): run \`copilot-forever install\` again${isWindows ? '; until then the host task cannot start the host at logon or after a trim' : ''}`);
   } else pass(`installed (${marker.hostService.kind}: ${marker.hostService.name}, ${marker.watch.name})`);
 
-  (await isListening(cfg.host.port)) ? pass(`port ${cfg.host.port} listening`) : warn(`port ${cfg.host.port} not listening`);
+  (await isListening(cfg.host.port)) ? pass(`port ${cfg.host.port} listening`) : warn(`port ${cfg.host.port} not listening (start the host: copilot-forever host start)`);
   let hostInfo = null;
   let hosts = [];
   try {
@@ -50,7 +50,7 @@ export async function doctor(cfg, log) {
     fail(e.message);
   }
   if (!hostInfo) {
-    warn(`no standalone host on port ${cfg.host.port}`);
+    warn(`no standalone host on port ${cfg.host.port} (start it: copilot-forever host start)`);
     const vv = await checkVersions(cfg);
     vv.notes.forEach((n) => pass(n));
     vv.problems.forEach((p) => fail(p));
@@ -64,7 +64,7 @@ export async function doctor(cfg, log) {
   }
   const session = findSession(cfg, Number(hostInfo.host.pid), table);
   if (!session) {
-    warn(`no session for ${cfg.repoFolder} runs under the host`);
+    warn(`no session for ${cfg.repoFolder} runs under the host (in VS Code's Agents window, start a new session on localhost:${cfg.host.port} in that folder)`);
     return ok;
   }
   pass(`session ${session.id}: ${mib(session.size)} MiB (threshold ${cfg.trim.thresholdMiB}), runtime pid ${session.runtimePid}`);

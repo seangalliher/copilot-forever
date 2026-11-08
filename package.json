@@ -1,6 +1,6 @@
 {
   "name": "copilot-forever",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "An AI dev team that runs for days entirely in GitHub Copilot: a keep-alive kit for one long-lived agent session (standalone VS Code agent host, automatic log trims) plus a goal loop of Orchestrator, Architect, Builder and Diff Reviewer agents.",
   "license": "MIT",
   "author": "Sean Galliher",
@@ -18,8 +18,6 @@
     "src",
     "agent",
     "templates",
-    "docs",
-    "demo",
     "bootstrap.mjs",
     "copilot-forever.config.example.json",
     "README.md",
