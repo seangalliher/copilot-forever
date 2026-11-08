@@ -96,10 +96,12 @@ So there are really two parts to this project: a way of working, the agent team,
 
 **Do and say:**
 1. "Fresh machine. I need Git, Node, the GitHub CLI, VS Code with GitHub Copilot, and the Copilot CLI." Show them installed.
-2. Create the `loopboard` repo on GitHub and clone it next to a clone of copilot-forever.
-3. Run the bootstrap: `node copilot-forever/bootstrap.mjs --repo loopboard --config copilot-forever/demo/goal-loop.config.json --start`. "One command: it copies the four agents and the standing orders into my repo, installs the keep-alive kit, starts the standalone agent host, and schedules the watcher every 10 minutes." Show the output, then `.github/agents/` in the explorer.
-4. "Models: Sonnet 5.5 for the Orchestrator, Architect and Builder; GPT-6.1 Sol for the reviewer." Show the `model:` lines.
-5. Add the standalone host to VS Code, as the bootstrap printed. In the Agents window, start a new session on **that** host, folder `loopboard`. "This is the one session that will run the whole build."
+2. Install the kit: `npm install -g copilot-forever`. "That's the whole install."
+3. Create the `loopboard` repo on GitHub and clone it: `gh repo create loopboard --public --add-readme --license mit --clone`, then `cd loopboard`. Download the demo config and goal into `.goal-loop/` with the two `curl.exe` commands from the [demo README](README.md#shared-steps). This step is off camera or cut short; say "the demo's settings: which models, and a low trim threshold so you'll see a trim."
+4. Run setup: `copilot-forever setup --start`. "One command: it checks my tools, copies the four agents and the standing orders into my repo, starts the standalone agent host, and schedules the watcher every 10 minutes." Show the output, then `.github/agents/` in the explorer.
+5. Commit and push the scaffolding, then run `copilot-forever protect`. "From now on, every change to main has to come through a pull request, mine and the agents'. The agents push as me, so this is the guard rail that doesn't depend on them following instructions." Show the line saying `main` is protected.
+6. "Models: Sonnet 5.5 for the Orchestrator, Architect and Builder; GPT-6.1 Sol for the reviewer." Show the `model:` lines.
+7. Add the standalone host to VS Code, as setup printed. In the Agents window, start a new session on **that** host, folder `loopboard`. "This is the one session that will run the whole build."
 
 **Capture:** the host name in the session picker, which proves it isn't VS Code's built-in host.
 

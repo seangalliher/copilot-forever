@@ -4,7 +4,7 @@ This demo builds **LoopBoard** ([GOAL.md](GOAL.md)), a local-first kanban board 
 
 Models ([goal-loop.config.json](goal-loop.config.json)): `claude-sonnet-5.5` for the Orchestrator, Architect and Builder; `gpt-6.1-sol` for the Diff Reviewer (fallback `gpt-6-luna`, also not the builder's family).
 
-The same goal runs in either mode. Steps 1 to 6 are shared; then follow **A** (persistent session, the one in the video) or **B** (Ralph loop). To show both, use two repositories, for example `loopboard` and `loopboard-ralph`.
+The same goal runs in either mode. Steps 1 to 7 are shared; then follow **A** (persistent session, the one in the video) or **B** (Ralph loop). To show both, use two repositories, for example `loopboard` and `loopboard-ralph`.
 
 The demo config differs from the kit's defaults in three ways, all for the video:
 
@@ -23,35 +23,41 @@ All commands run in an ordinary terminal (PowerShell on Windows, a shell on macO
 
 ## Shared steps
 
-**1. Get the kit:**
+**1. Install the kit:**
 
 ```bash
-git clone https://github.com/seangalliher/copilot-forever.git
+npm install -g copilot-forever
 ```
 
-**2. Create the demo repository** with one initial commit (the gate needs a commit to test):
+**2. Create the demo repository** with one initial commit (the gate needs a commit to test), and go into it:
 
 ```bash
 gh repo create loopboard --public --add-readme --license mit --clone
 ```
 
-**3. Bootstrap it with the demo config.** This installs the kit (`npm ci`, `npm link`), checks the tools, and writes the four agents, the standing orders, the gate script and the handoff template into `loopboard`. For mode A add `--start`, which also schedules the watcher every 10 minutes and starts the standalone agent host; leave it out for mode B.
-
-```bash
-node copilot-forever/bootstrap.mjs --repo loopboard --config copilot-forever/demo/goal-loop.config.json --start
-```
-
-**4. Check the models** in `loopboard/.github/agents/*.agent.md` (the `model:` lines) and put the goal in place. (In mode A you can paste the goal into the chat instead; the Orchestrator saves it to this file.)
-
-```bash
-cp copilot-forever/demo/GOAL.md loopboard/.goal-loop/GOAL.md
-```
-
-**5. Commit the scaffolding** to the default branch yourself. The loop itself never pushes to the default branch.
-
 ```bash
 cd loopboard
 ```
+
+**3. Get the demo config and the goal.** Setup uses a `.goal-loop/config.json` that is already there, and keeps an existing `GOAL.md`. On Windows, type `curl.exe`, not `curl`: Windows PowerShell treats `curl` as a different command.
+
+```bash
+curl --create-dirs -o .goal-loop/config.json https://raw.githubusercontent.com/seangalliher/copilot-forever/main/demo/goal-loop.config.json
+```
+
+```bash
+curl -o .goal-loop/GOAL.md https://raw.githubusercontent.com/seangalliher/copilot-forever/main/demo/GOAL.md
+```
+
+**4. Set it up.** Setup checks the tools, and says how to fix any that are missing. It then writes the four agents, the standing orders, the gate script and the handoff template into the repository. For mode A, add `--start`: it also schedules the watcher every 10 minutes and starts the standalone agent host. Leave it out for mode B.
+
+```bash
+copilot-forever setup --start
+```
+
+Then check the models in `.github/agents/*.agent.md` (the `model:` lines). In mode A you can paste the goal into the chat instead of downloading it; the Orchestrator saves it to `.goal-loop/GOAL.md`.
+
+**5. Commit the scaffolding** to the default branch yourself, and push it:
 
 ```bash
 git add .github/agents .github/copilot-instructions.md .goal-loop
@@ -61,17 +67,21 @@ git add .github/agents .github/copilot-instructions.md .goal-loop
 git commit -m "Add goal-loop agents and goal" && git push
 ```
 
-**6. Let GitHub Pages deploy from Actions** (the goal deploys to Pages; changing repository settings is yours to do, not the agents'):
+**6. Protect `main`.** From now on, GitHub requires a pull request for every change to `main`, admins included. The agents push as you, so this is what stops one pushing straight to it. A public repository gets this on GitHub's free plan.
+
+```bash
+copilot-forever protect
+```
+
+**7. Let GitHub Pages deploy from Actions.** The goal deploys to Pages, and changing repository settings is yours to do, not the agents':
 
 ```bash
 gh api -X POST repos/seangalliher/loopboard/pages -f build_type=workflow
 ```
 
-Recommended: turn on branch protection for `main` (require a pull request and passing checks).
-
 ## A. Persistent session (VS Code)
 
-**A1. Connect VS Code.** Add the standalone host to the `chat.remoteAgentHosts` user setting with address `localhost:47811` and the token from `~/.copilot-forever/token.txt`, as the bootstrap printed. Reload the window. To check the host: `copilot-forever host status --config .goal-loop/copilot-forever.config.json`.
+**A1. Connect VS Code.** Add the standalone host to the `chat.remoteAgentHosts` user setting with address `localhost:47811` and the token from `~/.copilot-forever/token.txt`, as setup printed. Reload the window. To check the host: `copilot-forever host status --config .goal-loop/copilot-forever.config.json`.
 
 **A2. Start the loop.** In the Agents window, start a new session on **that** host (not VS Code's built-in one), choose the `loopboard` folder and the **Goal Orchestrator** agent, set the effort in the model picker to **High**, and send:
 

@@ -9,7 +9,7 @@ The long version is [VIDEO-SCRIPT.md](VIDEO-SCRIPT.md). This one is for recordin
 
 ## Before take 1 (5 minutes of setup, off camera)
 
-- [ ] `loopboard` repo created and cloned next to `copilot-forever`; Git, Node, `gh`, VS Code with Copilot, and the Copilot CLI installed.
+- [ ] `loopboard` repo created and cloned, with the demo config and goal in `.goal-loop/` ([demo README](README.md#shared-steps), steps 2 and 3); Git, Node, `gh`, VS Code with Copilot, and the Copilot CLI installed.
 - [ ] Notifications on (Windows: Focus off) so the trim toast shows.
 - [ ] Close anything private: other browser tabs, email, chat. Never show the token file or `gh auth` output.
 - [ ] Note your Copilot usage (AI credits) so you can say what the run cost.
@@ -29,10 +29,10 @@ The long version is [VIDEO-SCRIPT.md](VIDEO-SCRIPT.md). This one is for recordin
 - "So I built two things: a team of agents, and a small kit that keeps the session alive."
 
 **3. Setup (1 min)**
-- Run the bootstrap: `node copilot-forever/bootstrap.mjs --repo loopboard --config copilot-forever/demo/goal-loop.config.json --start`
+- Install and run setup: `npm install -g copilot-forever`, then `copilot-forever setup --start` in `loopboard`. After pushing the scaffolding: `copilot-forever protect`.
 - Say what it did: copied four agents into my repo, started a standalone agent host that doesn't belong to VS Code, and scheduled a watcher.
 - Open `.github/agents/`: Orchestrator, Architect, Builder, Diff Reviewer. "Sonnet 5.5 builds; GPT-6.1 Sol reviews. A different model family as a second opinion."
-- Add the host to VS Code, as the bootstrap printed, and start a new session on that host in the `loopboard` folder with the **Goal Orchestrator** agent; set the effort in the model picker to High. Optional line: "The planner and the reviewer think at maximum effort; the builder and the coordinator at high. Judgement where it matters, speed where the spec carries it."
+- Add the host to VS Code, as setup printed, and start a new session on that host in the `loopboard` folder with the **Goal Orchestrator** agent; set the effort in the model picker to High. Optional line: "The planner and the reviewer think at maximum effort; the builder and the coordinator at high. Judgement where it matters, speed where the spec carries it."
 
 **4. The goal and the plan (2 min)**
 - Paste the goal from `demo/GOAL.md`. "That's all I'm telling it."
