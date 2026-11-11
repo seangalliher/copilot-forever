@@ -15,11 +15,14 @@ export const BIN = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '.
 export const NPX_REFUSAL = 'copilot-forever is running from the npx cache, which npm can clear, so a schedule pointing at it would break. '
   + 'Install it for good with `npm install -g copilot-forever`, then run the same command with `copilot-forever` instead of `npx copilot-forever`.';
 
-/** Minutes a watcher run may take, with margin: idle recheck, host stop/start and continue retries. */
+/**
+ * Minutes a watcher run may take, with margin: idle recheck, host stop/start and two rounds of
+ * continue retries (an owed continue from an earlier trim, then this run's own).
+ */
 export function watchTimeLimitMinutes(cfg) {
   const w = cfg.watch;
-  const s = w.idleRecheckSeconds + w.runtimeExitTimeoutSeconds + cfg.host.startTimeoutSeconds + 120 + w.continueDelaySeconds +
-    w.continueTries * (w.continueTimeoutSeconds + 35) + (w.continueTries - 1) * w.continueRetrySeconds;
+  const round = w.continueTries * (w.continueTimeoutSeconds + 35) + (w.continueTries - 1) * w.continueRetrySeconds;
+  const s = w.idleRecheckSeconds + w.runtimeExitTimeoutSeconds + cfg.host.startTimeoutSeconds + 120 + w.continueDelaySeconds + 2 * round;
   return Math.max(15, Math.ceil(s / 60) + 5);
 }
 

@@ -100,8 +100,8 @@ The session is the `session-state` folder whose `workspace.yaml` names your repo
 4. It trims the log. The full log is first copied to `~/.copilot/session-archive/<id>/events-<UTC>.jsonl`. The trim keeps the session-start header events and every event from the latest `session.compaction_start` whose `session.compaction_complete` has `data.success == true`. An event whose parent was cut is re-parented onto the last header event. The new log is written to a temp file and renamed over the old one, then read back and checked. If the check fails, the archive is restored.
 5. It starts the host again, through the installed service, so the host gets the scheduler's fresh environment.
 6. It moves the request to `trim-history/` and rewrites the status file, so the resumed agent never reads a stale `trim_due`.
-7. It sends the continue message over AHP: `initialize`, `subscribe` to the session, `subscribe` to its default chat, then dispatch `chat/turnStarted`. The turn reuses the model and custom agent of the chat's last user message. If the chat has no earlier user message, it uses your agent file. The send refuses if the chat is busy or names a different custom agent. It counts as done only when the agent starts responding. It retries up to 3 times.
-8. It shows a desktop notification: trimmed and resumed, trimmed but resume needed, or needs attention.
+7. It sends the continue message over AHP: `initialize`, `subscribe` to the session, `subscribe` to its default chat, then dispatch `chat/turnStarted`. The turn reuses the model and custom agent of the chat's last user message. If the chat has no earlier user message, it uses your agent file. The send refuses if the chat is busy or names a different custom agent. It counts as done only when the agent starts responding. It retries up to 3 times. If the trim worked but the continue did not go through (or the host did not come back), the watcher records it as owed in `<stateDir>/pending-continue-<instanceName>.json`. Every later run retries it once, before it looks for the session (a restarted host holds no lock on it until a message loads it): the message says when the trim happened and asks the agent to check git state and running work first. It is cleared when it goes through or when the log shows you resumed the session yourself; after `pendingContinueMaxTries` runs it stops and notifies you once. Seen with the same design on a real machine: no continue was sent after a trim, and the agent sat idle for 22 hours.
+8. It shows a desktop notification: trimmed and resumed, trimmed with the continue pending, trimmed but resume needed, or needs attention.
 
 If the trim fails, the host is still restarted with the session intact, and the agent is told to continue.
 
@@ -237,6 +237,7 @@ Logs: `~/.copilot-forever/logs/copilot-forever.log` (the kit) and `host-<instanc
 | `watch.quietSeconds` / `idleRecheckSeconds` | `120` / `90` | Idle detection. |
 | `watch.staleHostMinutes` | `30` | Notify when the host still lists the session as running although its last turn ended this long ago. `0` turns it off. |
 | `watch.continueTries` / `continueTimeoutSeconds` | `3` / `180` | Continue attempts, and how long to wait for the agent to start working. |
+| `watch.pendingContinueMaxTries` | `6` | Later watcher runs that retry a continue a trim could not deliver (about an hour at a 10-minute interval), then one notification. |
 | `files.status` / `request` / `history` / `handoff` | `logs/…` | The files shared with the agent. |
 | `continueText` | (see example) | The continue message; `{handoff}` is replaced with the handoff path. |
 | `resume.enabled` | `true` | Network resume on or off. |

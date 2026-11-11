@@ -190,6 +190,38 @@ test('a request with nothing safe to trim is refused without stopping the host, 
   assert.match(JSON.parse(turns[turns.length - 1]).message.text, /did NOT happen/);
 });
 
+test('a continue that fails after a trim is recorded, and a later run with no session found delivers it', async () => {
+  fs.writeFileSync(eventsFile, fs.readFileSync(path.join(path.dirname(BIN), '..', 'test', 'fixtures', 'basic.jsonl'), 'utf8'));
+  ageLog();
+  const reqFile = path.join(repo, 'logs', 'trim-request.json');
+  fs.writeFileSync(reqFile, JSON.stringify({ requested_at: new Date().toISOString(), session_id: SID }));
+  const pendingFile = path.join(root, 'state', 'pending-continue-copilot-forever.json');
+  // The restarted host refuses every turn, so the trim run's continue fails.
+  fs.writeFileSync(stateFile, JSON.stringify({ ...state(), ahpBehavior: 'reject' }));
+  const sentBefore = fs.readFileSync(path.join(root, 'received.jsonl'), 'utf8').trim().split('\n').length;
+  let r = await cli('watch');
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /archived full log/);
+  assert.match(r.out, /continue try 2: failed/);
+  assert.match(r.out, /recorded it in .*pending-continue-copilot-forever\.json/);
+  const p = JSON.parse(fs.readFileSync(pendingFile, 'utf8'));
+  assert.equal(p.ahp_session, AHP);
+  assert.equal(p.tries, 0);
+
+  // A fresh host that accepts turns, whose runtime holds no session lock: no session is found.
+  await cli('host', 'stop');
+  fs.writeFileSync(stateFile, JSON.stringify({ ...state(), ahpBehavior: 'respond' }));
+  await cli('host', 'start');
+  for (const n of fs.readdirSync(sessionDir)) if (/^inuse\.\d+\.lock$/.test(n)) fs.rmSync(path.join(sessionDir, n));
+  r = await cli('watch');
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /pending continue try 1: ok/);
+  assert.ok(!fs.existsSync(pendingFile), 'cleared after delivery');
+  const turns = fs.readFileSync(path.join(root, 'received.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  assert.ok(turns.length > sentBefore);
+  assert.match(turns.at(-1).message.text, /^Continue\. Your session log was trimmed at .*only went through now/);
+});
+
 test('host status and host stop --dry-run find the host and leave it running', async () => {
   const s = state();
   const st = await cli('host', 'status');

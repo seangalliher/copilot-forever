@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Fixed
+
+- **A continue that fails after a trim is retried.** Before, when the trim worked but the continue did not go through (every try failed, or the host did not come back), the watcher showed one "resume needed" notification and never tried again: later runs found no session, because a restarted host holds no lock on it until a message loads it, and network and stall resume treat a trim stop as deliberate. The same design left an agent idle for 22 hours on a real machine. The trim run now records the owed continue in `<stateDir>/pending-continue-<instanceName>.json`, and every later run retries it once before looking for the session, with a message that says when the trim happened and asks the agent to check git state and running work first. It is cleared when it goes through or when the log shows the session was resumed by hand; after `watch.pendingContinueMaxTries` (default 6) runs it notifies once. `--dry-run` reports what it would do. The scheduled watcher's time limit now allows for two rounds of continue tries; run `install` again to update an existing schedule.
+
 ## [0.2.0] - 2026-11-08
 
 The first version on npm, and the first proven on a real session: the kit trimmed a goal-loop session's log at a safe point (13 MiB to 0.6 MiB) and resumed it, through three batches of a private LoopBoard rehearsal on Windows.

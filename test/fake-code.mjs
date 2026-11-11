@@ -34,7 +34,7 @@ if (args[0] === '--version') {
   const s = read();
   const dir = path.dirname(stateFile);
   const server = await startFakeAhp({
-    port, token, sessionUri: s.ahpSession, workingDirectories: [s.repoUri],
+    port, token, sessionUri: s.ahpSession, workingDirectories: [s.repoUri], behavior: s.ahpBehavior,
     onTurn: (a) => fs.appendFileSync(path.join(dir, 'received.jsonl'), JSON.stringify(a) + '\n'),
   });
   // The fake copilot-runtime: a child that holds the session lock until the host tree is killed.

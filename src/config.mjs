@@ -46,6 +46,9 @@ export const DEFAULTS = Object.freeze({
     // Notify when the host still lists the session as running although its last turn ended and
     // the log has been quiet this long (a stale host status blocks trims and resumes). 0 = off.
     staleHostMinutes: 30,
+    // After a trim whose continue could not be delivered, later runs retry it this many times
+    // (one round of continueTries per run), then notify once.
+    pendingContinueMaxTries: 6,
   },
   // Files the agent reads and writes, relative to repoFolder.
   files: {
@@ -140,6 +143,7 @@ export function validate(cfg) {
   for (const [k, v] of Object.entries(cfg.watch)) if (!isPosInt(v)) p.push(`watch.${k} must be a non-negative integer`);
   if (cfg.watch.intervalMinutes < 1) p.push('watch.intervalMinutes must be at least 1');
   if (cfg.watch.continueTries < 1) p.push('watch.continueTries must be at least 1');
+  if (cfg.watch.pendingContinueMaxTries < 1) p.push('watch.pendingContinueMaxTries must be at least 1');
   for (const k of ['status', 'request', 'history', 'handoff']) if (typeof cfg.files[k] !== 'string' || !cfg.files[k]) p.push(`files.${k} must be a path`);
   if (typeof cfg.continueText !== 'string' || !cfg.continueText.trim()) p.push('continueText must be non-empty');
   const r = cfg.resume;
@@ -197,6 +201,7 @@ export function resolveConfig(raw, baseDir, file = null) {
   cfg.stallStateFile = path.join(cfg.stateDir, `stall-${cfg.instanceName}.json`);
   cfg.staleStateFile = path.join(cfg.stateDir, `stale-${cfg.instanceName}.json`);
   cfg.sharedStateFile = path.join(cfg.stateDir, `shared-${cfg.instanceName}.json`);
+  cfg.pendingContinueFile = path.join(cfg.stateDir, `pending-continue-${cfg.instanceName}.json`);
   cfg.installMarker = path.join(cfg.stateDir, `installed-${cfg.instanceName}.json`);
   return cfg;
 }

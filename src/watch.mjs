@@ -1,6 +1,7 @@
 // One watcher run (the scheduler runs it every few minutes).
 //
-// Every run:  finds the long-lived session on the standalone host and writes the status file
+// Every run:  retries a continue an earlier trim could not deliver (pending continue), then finds
+//             the long-lived session on the standalone host and writes the status file
 //             (session id, AHP session URI, log size, trim_due).
 // Resume run: when no trim is requested and the last turn died on a network error, sends a
 //             continue once the model API answers again; and when the last turn ended waiting on
@@ -151,6 +152,20 @@ async function watchInner(cfg, log, { dryRun, force }) {
     return { state: 'no-host' };
   }
   const hostPid = Number(hostInfo.host.pid);
+  // Before the session lookup: after a host restart the trimmed session holds no runtime lock until
+  // a message loads it, so findSession finds nothing until the owed continue goes through.
+  let pending;
+  try {
+    pending = await maybePendingContinue(cfg, log, {
+      dryRun,
+      listening: () => isListening(cfg.host.port),
+      send: (uri, text) => sendContinue(cfg, log, uri, text),
+      notify: (title, body) => notify(cfg, log, title, body),
+    });
+  } catch (e) {
+    log.warn(`pending continue check failed: ${e.message}`);
+    pending = { state: 'error' };
+  }
   const table = await processTable();
   let shared;
   try {
@@ -162,7 +177,7 @@ async function watchInner(cfg, log, { dryRun, force }) {
   const session = findSession(cfg, hostPid, table);
   if (!session) {
     if (request || dryRun) log.info(`no session for ${cfg.repoFolder} runs under host ${hostPid}${request ? '; trim requested but nothing done' : ''}`);
-    return { state: 'no-session', hostPid, shared };
+    return { state: 'no-session', hostPid, shared, pending };
   }
 
   // The AHP session URI differs from the Copilot session id. Taken from the host's active listing
@@ -203,7 +218,7 @@ async function watchInner(cfg, log, { dryRun, force }) {
     const resume = await maybeResume(cfg, log, io);
     // A network resume this run already sent a continue (or is waiting on one); check stalls next run.
     const stall = ['resumed', 'resume-failed', 'would-resume'].includes(resume.state) ? { state: 'skipped' } : await maybeStallResume(cfg, log, io);
-    return { state: 'status', status: st, resume, stall, stale, shared };
+    return { state: 'status', status: st, resume, stall, stale, shared, pending };
   }
 
   // ---- trim run ------------------------------------------------------------------------------
@@ -307,14 +322,99 @@ async function watchInner(cfg, log, { dryRun, force }) {
   }
 
   const sizes = trim ? `${mib(trim.before)} -> ${mib(trim.after)} MiB` : '';
+  // A continue still owed after a successful trim: later runs retry it (maybePendingContinue).
+  const owed = trim && !resumed && ahpSession
+    ? recordPendingContinue(cfg, log, { ahpSession, sessionDir: session.dir, trimmedAt: nowIso() })
+    : null;
+  const retry = `It will be retried on the next ${cfg.watch.pendingContinueMaxTries} watcher runs; to resume now, open the session and send: continue from the latest handoff addendum.`;
   if (trim && up && resumed) {
     await notify(cfg, log, `Agent log trimmed and resumed (${sizes})`, 'No action needed. The agent is working again.');
+  } else if (owed) {
+    await notify(cfg, log, `Agent log trimmed (${sizes}): continue pending`, `The automatic continue did not go through (${up ? lastDetail : 'the host is not listening'}). ${retry}`);
   } else if (trim && up) {
     await notify(cfg, log, `Agent log trimmed (${sizes}): resume needed`, `The automatic continue failed (${lastDetail}). Open the session and send: continue from the latest handoff addendum.`);
   } else {
     await notify(cfg, log, 'Agent log trim needs attention', `Trim ok: ${!!trim}${trimError ? ` (${trimError})` : ''}. Host listening: ${up}. Resumed: ${resumed}. See ${cfg.logFile}. The session is intact either way.`);
   }
-  return { state: 'trimmed', trim, trimError, up, resumed };
+  return { state: 'trimmed', trim, trimError, up, resumed, pending, owed: !!owed };
+}
+
+// ---- pending continue after a trim ------------------------------------------------------------
+// A trim stops the session deliberately, so neither network nor stall resume applies to it, and
+// after the host restarts the session holds no runtime lock until a message loads it. When the trim
+// run cannot deliver its continue, it records one as owed, and every later run retries it before
+// the session lookup. Seen on a real machine with the same design: the host check failed after a
+// trim, no continue was sent, and the agent sat idle for 22 hours.
+
+const logMtime = (sessionDir) => {
+  try { return fs.statSync(path.join(sessionDir, 'events.jsonl')).mtimeMs; } catch { return null; }
+};
+
+/** Record that the trim's continue is still owed. The log's mtime, taken now, tells later runs whether anyone resumed the session since. */
+export function recordPendingContinue(cfg, log, { ahpSession, sessionDir, trimmedAt }) {
+  const p = { ahp_session: ahpSession, session_dir: sessionDir, trimmed_at: trimmedAt, log_mtime_ms: logMtime(sessionDir), tries: 0, gave_up: false };
+  writeJsonAtomic(cfg.pendingContinueFile, p);
+  log.warn(`the continue after the trim was not delivered; recorded it in ${cfg.pendingContinueFile} for the next runs`);
+  return p;
+}
+
+export function pendingText(cfg, trimmedAt) {
+  const rel = path.relative(cfg.repoFolder, cfg.files.handoff).replace(/\\/g, '/');
+  return `Continue. Your session log was trimmed at ${trimmedAt} after you stopped for a log trim, and the automatic continue only went through now. Resume from the latest addendum in ${rel}, and check git state and any work that was running before you act.`;
+}
+
+/**
+ * One retry of an owed continue (see recordPendingContinue). Clears it when the log shows the
+ * session worked since (resumed by hand) or when the continue goes through; after
+ * watch.pendingContinueMaxTries tries, notifies once and stops trying.
+ * @param {{ dryRun?: boolean, listening: () => Promise<boolean>, send: (uri: string, text: string) => Promise<{ ok: boolean, detail: string }>, notify: (title: string, body: string) => Promise<any> }} io
+ */
+export async function maybePendingContinue(cfg, log, { dryRun = false, listening, send, notify: tell }) {
+  const file = cfg.pendingContinueFile;
+  if (!exists(file)) return { state: 'none' };
+  const drop = () => { if (!dryRun) fs.rmSync(file, { force: true }); };
+  let p = null;
+  try { p = readJson(file); } catch { /* handled below */ }
+  if (!p || typeof p.ahp_session !== 'string' || typeof p.session_dir !== 'string') {
+    log.warn(`pending continue: ${file} is unreadable; ${dryRun ? 'would remove' : 'removing'} it`);
+    drop();
+    return { state: 'unreadable' };
+  }
+  const mtime = logMtime(p.session_dir);
+  if (mtime !== null && mtime !== p.log_mtime_ms) {
+    log.info(`pending continue: the session log has changed since the trim at ${p.trimmed_at} (resumed by hand); ${dryRun ? 'would clear' : 'clearing'} it`);
+    drop();
+    return { state: 'cleared' };
+  }
+  if (p.gave_up) return { state: 'gave-up' };
+  if (!(await listening())) {
+    log.info('pending continue: the host is not listening; will try again next run');
+    return { state: 'host-down' };
+  }
+  const max = cfg.watch.pendingContinueMaxTries;
+  const tries = Number(p.tries) || 0;
+  if (tries >= max) {
+    log.warn(`pending continue: gave up after ${tries} tries`);
+    if (dryRun) return { state: 'would-give-up', tries };
+    writeJsonAtomic(file, { ...p, gave_up: true });
+    await tell('Agent log trimmed: resume needed', `The automatic continue after the ${p.trimmed_at} trim failed on ${tries} later tries. Open the session and send: continue from the latest handoff addendum. See ${cfg.logFile}.`);
+    return { state: 'gave-up-now', tries };
+  }
+  if (dryRun) {
+    log.info(`pending continue: would send continue (try ${tries + 1} of ${max}) to ${p.ahp_session}`);
+    return { state: 'would-send', tries };
+  }
+  writeJsonAtomic(file, { ...p, tries: tries + 1, last_try: nowIso() });
+  const r = await send(p.ahp_session, pendingText(cfg, p.trimmed_at));
+  log.info(`pending continue try ${tries + 1}: ${r.ok ? 'ok' : 'failed'}: ${r.detail}`);
+  if (!r.ok) {
+    // A failed attempt can still load the session and write to its log; that is not a hand resume.
+    writeJsonAtomic(file, { ...p, tries: tries + 1, last_try: nowIso(), log_mtime_ms: logMtime(p.session_dir) });
+    return { state: 'failed', tries: tries + 1 };
+  }
+  fs.rmSync(file, { force: true });
+  await tell('Agent resumed after its log trim', `The continue after the ${p.trimmed_at} trim went through on a later try. No action needed.`);
+  return { state: 'resumed', tries: tries + 1 };
 }
 
 function archiveRequest(cfg, tag) {
