@@ -369,7 +369,8 @@ export function pendingText(cfg, trimmedAt) {
  * watch.pendingContinueMaxTries tries, notifies once and stops trying.
  * @param {{ dryRun?: boolean, listening: () => Promise<boolean>, send: (uri: string, text: string) => Promise<{ ok: boolean, detail: string }>, notify: (title: string, body: string) => Promise<any> }} io
  */
-export async function maybePendingContinue(cfg, log, { dryRun = false, listening, send, notify: tell }) {
+export async function maybePendingContinue(cfg, log, io) {
+  const { dryRun = false, listening, send, notify: tell } = io;
   const file = cfg.pendingContinueFile;
   if (!exists(file)) return { state: 'none' };
   const drop = () => { if (!dryRun) fs.rmSync(file, { force: true }); };
