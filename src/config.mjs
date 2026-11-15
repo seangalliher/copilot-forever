@@ -49,6 +49,13 @@ export const DEFAULTS = Object.freeze({
     // After a trim whose continue could not be delivered, later runs retry it this many times
     // (one round of continueTries per run), then notify once.
     pendingContinueMaxTries: 6,
+    // A continue the host accepts has not necessarily started work: after each one, the log is read
+    // this long for the turn's first outcome (work started, or a session.error). 0 = check once.
+    turnOutcomeSeconds: 90,
+    // When the turn failed because the restarted host has no Copilot sign-in yet, the continue stays
+    // owed and is retried this many runs (about a day at 10-minute runs): it lasts until someone
+    // opens VS Code, which reconnects to the host and passes the sign-in.
+    pendingContinueAuthMaxTries: 144,
   },
   // Files the agent reads and writes, relative to repoFolder.
   files: {
@@ -144,6 +151,7 @@ export function validate(cfg) {
   if (cfg.watch.intervalMinutes < 1) p.push('watch.intervalMinutes must be at least 1');
   if (cfg.watch.continueTries < 1) p.push('watch.continueTries must be at least 1');
   if (cfg.watch.pendingContinueMaxTries < 1) p.push('watch.pendingContinueMaxTries must be at least 1');
+  if (cfg.watch.pendingContinueAuthMaxTries < 1) p.push('watch.pendingContinueAuthMaxTries must be at least 1');
   for (const k of ['status', 'request', 'history', 'handoff']) if (typeof cfg.files[k] !== 'string' || !cfg.files[k]) p.push(`files.${k} must be a path`);
   if (typeof cfg.continueText !== 'string' || !cfg.continueText.trim()) p.push('continueText must be non-empty');
   const r = cfg.resume;

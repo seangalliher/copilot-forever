@@ -41,7 +41,7 @@ before(async () => {
     stateDir: path.join(root, 'state'),
     host: { codeCommand: [process.execPath, FAKE_CODE, '--state', stateFile], port, startVia: 'direct', startTimeoutSeconds: 30 },
     trim: { thresholdMiB: 0.001 },
-    watch: { quietSeconds: 0, idleRecheckSeconds: 0, runtimeExitTimeoutSeconds: 10, continueDelaySeconds: 0, continueTries: 2, continueRetrySeconds: 1, continueTimeoutSeconds: 10 },
+    watch: { quietSeconds: 0, idleRecheckSeconds: 0, runtimeExitTimeoutSeconds: 10, continueDelaySeconds: 0, continueTries: 2, continueRetrySeconds: 1, continueTimeoutSeconds: 10, turnOutcomeSeconds: 2 },
     notify: false,
   }, null, 2));
 });
@@ -220,6 +220,49 @@ test('a continue that fails after a trim is recorded, and a later run with no se
   const turns = fs.readFileSync(path.join(root, 'received.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
   assert.ok(turns.length > sentBefore);
   assert.match(turns.at(-1).message.text, /^Continue\. Your session log was trimmed at .*only went through now/);
+});
+
+test('a continue the host accepts but whose turn fails for a missing sign-in is still owed, and retried until it starts work', async () => {
+  // A fresh host whose runtime holds the session lock again (the test above removed it).
+  await cli('host', 'stop');
+  await cli('host', 'start');
+  fs.writeFileSync(eventsFile, fs.readFileSync(path.join(path.dirname(BIN), '..', 'test', 'fixtures', 'basic.jsonl'), 'utf8'));
+  ageLog();
+  const reqFile = path.join(repo, 'logs', 'trim-request.json');
+  fs.writeFileSync(reqFile, JSON.stringify({ requested_at: new Date().toISOString(), session_id: SID }));
+  const pendingFile = path.join(root, 'state', 'pending-continue-copilot-forever.json');
+  // The restarted host accepts the turn, then logs the real 2026-11-14 shape ending in the sign-in error.
+  fs.writeFileSync(stateFile, JSON.stringify({ ...state(), ahpBehavior: 'respond', turnEvents: 'auth' }));
+  let r = await cli('watch');
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /archived full log/);
+  assert.match(r.out, /continue try 1: ok/);
+  assert.match(r.out, /continue turn outcome: auth \(Execution failed: InvalidArg, No GitHub OAuth token/);
+  assert.match(r.out, /notify: Agent log trimmed \([^)]*\) but not resumed: Copilot sign-in missing — .*Open VS Code/);
+  assert.doesNotMatch(r.out, /trimmed and resumed/);
+  let p = JSON.parse(fs.readFileSync(pendingFile, 'utf8'));
+  assert.equal(p.reason, 'auth');
+  assert.equal(p.tries, 0);
+  assert.equal(p.log_mtime_ms, fs.statSync(eventsFile).mtimeMs, 'stored after the failed turn wrote');
+
+  // Still no sign-in on the next run: owed, no second notice.
+  r = await cli('watch');
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /pending continue try 1: ok/);
+  assert.match(r.out, /the turn failed because the host has no Copilot sign-in/);
+  assert.doesNotMatch(r.out, /notify:/);
+  p = JSON.parse(fs.readFileSync(pendingFile, 'utf8'));
+  assert.equal(p.tries, 1);
+
+  // VS Code reconnected: the next try starts work and clears it.
+  fs.writeFileSync(stateFile, JSON.stringify({ ...state(), turnEvents: 'working' }));
+  r = await cli('watch');
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /pending continue try 2: ok/);
+  assert.match(r.out, /continue turn outcome: working/);
+  assert.match(r.out, /notify: Agent resumed after its log trim/);
+  assert.ok(!fs.existsSync(pendingFile));
+  fs.writeFileSync(stateFile, JSON.stringify({ ...state(), turnEvents: null }));
 });
 
 test('host status and host stop --dry-run find the host and leave it running', async () => {

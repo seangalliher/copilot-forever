@@ -50,3 +50,29 @@ export function freePort() {
     s.on('error', reject);
   });
 }
+
+/**
+ * Log lines a continue's turn writes, in the order seen on a real host after a trim
+ * (2026-11-14): session.resume, subagent.selected, session.shutdown, session.resume, hook.start,
+ * hook.end, then the turn's first outcome, all within 11 s of the send and with no user.message.
+ * spanMs squeezes the 11 s into less, so a test's later turns are not older than these lines.
+ * kind 'auth' ends with the missing-sign-in session.error, 'working' with the model's reasoning and
+ * message, 'error' with another session.error, 'unknown' with nothing after the hooks.
+ * @param {'auth'|'working'|'error'|'unknown'} kind
+ */
+export function continueTurnLines(kind, startMs = Date.now(), spanMs = 11000) {
+  const at = (s) => new Date(startMs + (s * spanMs) / 11).toISOString();
+  const ev = (n, type, data, s) => JSON.stringify({ type, data, id: `turn-${kind}-${n}`, timestamp: at(s), parentId: null });
+  const lines = [
+    ev(1, 'session.resume', {}, 0.1),
+    ev(2, 'subagent.selected', { agentName: 'orchestrator', agentDisplayName: 'Orchestrator', tools: [] }, 0.2),
+    ev(3, 'session.shutdown', {}, 0.5),
+    ev(4, 'session.resume', {}, 1),
+    ev(5, 'hook.start', { hookType: 'sessionStart' }, 2),
+    ev(6, 'hook.end', { hookType: 'sessionStart' }, 3),
+  ];
+  if (kind === 'auth') lines.push(ev(7, 'session.error', { errorType: 'error', message: 'Execution failed: InvalidArg, No GitHub OAuth token or Copilot HMAC key provided' }, 11));
+  if (kind === 'error') lines.push(ev(7, 'session.error', { errorType: 'error', message: 'Execution failed: model overloaded' }, 11));
+  if (kind === 'working') lines.push(ev(7, 'assistant.reasoning', { content: '...' }, 9), ev(8, 'assistant.message', { content: 'Resuming.' }, 10));
+  return lines.map((l) => l + '\n').join('');
+}

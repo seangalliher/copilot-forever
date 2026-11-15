@@ -310,12 +310,20 @@ async function watchInner(cfg, log, { dryRun, force }) {
 
   let resumed = false;
   let lastDetail = '';
+  /** @type {{ outcome: string, detail: string } | null} */
+  let turn = null;
   if (up && ahpSession) {
     await sleep(cfg.watch.continueDelaySeconds * 1000);
     const text = trim ? continueMessage(cfg) : `${continueMessage(cfg)} Note: the log trim failed (${trimError}); the full log is intact.`;
+    const sentAt = Date.now();
     const r = await sendContinue(cfg, log, ahpSession, text);
     resumed = r.ok;
     lastDetail = r.detail;
+    // Accepted is not working: the restarted host may have no Copilot sign-in yet.
+    if (r.ok) {
+      turn = await checkTurn(cfg, log, session.dir, sentAt);
+      if (turn.outcome === 'auth') resumed = false;
+    }
   } else if (up) {
     lastDetail = 'no AHP session URI known';
     log.warn(`${lastDetail}; cannot send continue`);
@@ -323,12 +331,17 @@ async function watchInner(cfg, log, { dryRun, force }) {
 
   const sizes = trim ? `${mib(trim.before)} -> ${mib(trim.after)} MiB` : '';
   // A continue still owed after a successful trim: later runs retry it (maybePendingContinue).
+  const authFail = turn?.outcome === 'auth';
   const owed = trim && !resumed && ahpSession
-    ? recordPendingContinue(cfg, log, { ahpSession, sessionDir: session.dir, trimmedAt: nowIso() })
+    ? recordPendingContinue(cfg, log, { ahpSession, sessionDir: session.dir, trimmedAt: nowIso(), reason: authFail ? 'auth' : 'not delivered' })
     : null;
   const retry = `It will be retried on the next ${cfg.watch.pendingContinueMaxTries} watcher runs; to resume now, open the session and send: continue from the latest handoff addendum.`;
-  if (trim && up && resumed) {
+  if (trim && up && resumed && turn?.outcome === 'error') {
+    await notify(cfg, log, `Agent log trimmed (${sizes}): continue sent, but its turn failed`, `The host accepted the continue, but the turn ended with an error: ${turn.detail}. A network error is resumed automatically; otherwise open the session and send: continue from the latest handoff addendum.`);
+  } else if (trim && up && resumed) {
     await notify(cfg, log, `Agent log trimmed and resumed (${sizes})`, 'No action needed. The agent is working again.');
+  } else if (owed && authFail) {
+    await notify(cfg, log, `Agent log trimmed (${sizes}) but not resumed: Copilot sign-in missing`, authAdvice(cfg));
   } else if (owed) {
     await notify(cfg, log, `Agent log trimmed (${sizes}): continue pending`, `The automatic continue did not go through (${up ? lastDetail : 'the host is not listening'}). ${retry}`);
   } else if (trim && up) {
@@ -336,7 +349,112 @@ async function watchInner(cfg, log, { dryRun, force }) {
   } else {
     await notify(cfg, log, 'Agent log trim needs attention', `Trim ok: ${!!trim}${trimError ? ` (${trimError})` : ''}. Host listening: ${up}. Resumed: ${resumed}. See ${cfg.logFile}. The session is intact either way.`);
   }
-  return { state: 'trimmed', trim, trimError, up, resumed, pending, owed: !!owed };
+  return { state: 'trimmed', trim, trimError, up, resumed, pending, owed: !!owed, turn: turn?.outcome ?? null };
+}
+
+// ---- did the continue start work? -------------------------------------------------------------
+// The host accepts a continue before the model is called. Seen on a real machine with the same
+// design (2026-11-14): the continue after a 2 a.m. trim was accepted, and 11 s later the turn failed
+// with "No GitHub OAuth token or Copilot HMAC key provided" because the restarted host had no Copilot
+// sign-in yet (most likely no VS Code window had reconnected to it). The watcher reported "trimmed
+// and resumed", network resume rightly skipped an auth error, and the agent sat idle for 12 hours.
+// So after every accepted continue, the log is read for the turn's first outcome.
+
+export const AUTH_MISSING = /No GitHub OAuth token|Copilot HMAC key|not signed in to GitHub|no Copilot token/i;
+const WORKING = new Set(['assistant.message', 'tool.execution_start', 'assistant.reasoning']);
+const TAIL_BYTES = 256 * 1024;
+
+/** The last whole lines of a file (at most TAIL_BYTES), or [] if it cannot be read. */
+function tailLines(file) {
+  let fd;
+  try {
+    fd = fs.openSync(file, 'r');
+    const size = fs.fstatSync(fd).size;
+    const len = Math.min(size, TAIL_BYTES);
+    const buf = Buffer.alloc(len);
+    fs.readSync(fd, buf, 0, len, size - len);
+    const lines = buf.toString('utf8').split('\n');
+    if (len < size) lines.shift(); // a partial first line
+    return lines;
+  } catch {
+    return [];
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+  }
+}
+
+/**
+ * The turn's first outcome among log lines with a timestamp at or after sinceMs: 'working' (the
+ * model answered or a tool started), 'auth' (a session.error saying the host has no Copilot
+ * sign-in), 'error' (any other session.error), or null (neither yet).
+ * @param {string[]} lines
+ * @param {number} sinceMs
+ * @returns {{ outcome: 'working'|'auth'|'error', detail: string } | null}
+ */
+export function classifyTurn(lines, sinceMs) {
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    let e;
+    try { e = JSON.parse(line); } catch { continue; }
+    const t = Date.parse(e?.timestamp);
+    if (!Number.isFinite(t) || t < sinceMs) continue;
+    if (WORKING.has(e.type)) return { outcome: 'working', detail: e.type };
+    if (e.type === 'session.error') {
+      const msg = String(e.data?.message ?? '');
+      return { outcome: AUTH_MISSING.test(msg) ? 'auth' : 'error', detail: msg.slice(0, 200) || 'session.error' };
+    }
+  }
+  return null;
+}
+
+/**
+ * Poll the session log for the outcome of a turn sent at sinceMs, for up to timeoutMs. 'unknown'
+ * when nothing decisive is logged in time (counted as resumed, as before this check existed). After
+ * an auth failure it waits for the log to go quiet, so the failed turn's last writes are not later
+ * mistaken for someone resuming the session by hand.
+ * @returns {Promise<{ outcome: 'working'|'auth'|'error'|'unknown', detail: string }>}
+ */
+export async function turnOutcome(eventsFile, sinceMs, { timeoutMs = 90000, pollMs = 5000, quietMs = 2000 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const r = classifyTurn(tailLines(eventsFile), sinceMs);
+    if (r) {
+      if (r.outcome === 'auth') await settle(eventsFile, quietMs);
+      return r;
+    }
+    if (Date.now() >= deadline) return { outcome: 'unknown', detail: `no work or error logged within ${Math.round(timeoutMs / 1000)} s` };
+    await sleep(Math.min(pollMs, Math.max(0, deadline - Date.now())));
+  }
+}
+
+/** Wait (at most a few quiet periods) until the file's mtime stops changing. */
+async function settle(file, quietMs) {
+  if (quietMs <= 0) return;
+  let last = mtimeOf(file);
+  for (let i = 0; i < 8; i++) {
+    await sleep(quietMs);
+    const m = mtimeOf(file);
+    if (m === last) return;
+    last = m;
+  }
+}
+
+function mtimeOf(file) {
+  try { return fs.statSync(file).mtimeMs; } catch { return null; }
+}
+
+/** The turn-outcome check with the configured timeout, logged. */
+async function checkTurn(cfg, log, sessionDir, sinceMs) {
+  const timeoutMs = cfg.watch.turnOutcomeSeconds * 1000;
+  const r = await turnOutcome(path.join(sessionDir, 'events.jsonl'), sinceMs, { timeoutMs, pollMs: Math.min(5000, Math.max(250, timeoutMs / 4)) });
+  const say = r.outcome === 'auth' ? log.warn : log.info;
+  say.call(log, `continue turn outcome: ${r.outcome} (${r.detail})`);
+  return r;
+}
+
+function authAdvice(cfg) {
+  const hours = Math.round((cfg.watch.pendingContinueAuthMaxTries * cfg.watch.intervalMinutes) / 60);
+  return `The restarted agent host has no Copilot sign-in yet. Open VS Code: it reconnects to the host and passes your sign-in. The watcher retries the continue every ${cfg.watch.intervalMinutes} minutes for up to ${hours} h.`;
 }
 
 // ---- pending continue after a trim ------------------------------------------------------------
@@ -351,10 +469,11 @@ const logMtime = (sessionDir) => {
 };
 
 /** Record that the trim's continue is still owed. The log's mtime, taken now, tells later runs whether anyone resumed the session since. */
-export function recordPendingContinue(cfg, log, { ahpSession, sessionDir, trimmedAt }) {
-  const p = { ahp_session: ahpSession, session_dir: sessionDir, trimmed_at: trimmedAt, log_mtime_ms: logMtime(sessionDir), tries: 0, gave_up: false };
+export function recordPendingContinue(cfg, log, { ahpSession, sessionDir, trimmedAt, reason = 'not delivered' }) {
+  const p = { ahp_session: ahpSession, session_dir: sessionDir, trimmed_at: trimmedAt, reason, log_mtime_ms: logMtime(sessionDir), tries: 0, gave_up: false };
   writeJsonAtomic(cfg.pendingContinueFile, p);
-  log.warn(`the continue after the trim was not delivered; recorded it in ${cfg.pendingContinueFile} for the next runs`);
+  const why = reason === 'auth' ? 'failed because the host has no Copilot sign-in' : 'was not delivered';
+  log.warn(`the continue after the trim ${why}; recorded it in ${cfg.pendingContinueFile} for the next runs`);
   return p;
 }
 
@@ -365,12 +484,15 @@ export function pendingText(cfg, trimmedAt) {
 
 /**
  * One retry of an owed continue (see recordPendingContinue). Clears it when the log shows the
- * session worked since (resumed by hand) or when the continue goes through; after
- * watch.pendingContinueMaxTries tries, notifies once and stops trying.
- * @param {{ dryRun?: boolean, listening: () => Promise<boolean>, send: (uri: string, text: string) => Promise<{ ok: boolean, detail: string }>, notify: (title: string, body: string) => Promise<any> }} io
+ * session worked since (resumed by hand) or when the continue goes through and its turn did not
+ * fail for a missing Copilot sign-in; after watch.pendingContinueMaxTries tries
+ * (watch.pendingContinueAuthMaxTries when the reason is a missing sign-in), notifies once and
+ * stops trying.
+ * @param {{ dryRun?: boolean, listening: () => Promise<boolean>, send: (uri: string, text: string) => Promise<{ ok: boolean, detail: string }>, notify: (title: string, body: string) => Promise<any>, outcome?: (sessionDir: string, sinceMs: number) => Promise<{ outcome: string, detail: string }> }} io
  */
 export async function maybePendingContinue(cfg, log, io) {
   const { dryRun = false, listening, send, notify: tell } = io;
+  const outcome = io.outcome ?? ((dir, since) => checkTurn(cfg, log, dir, since));
   const file = cfg.pendingContinueFile;
   if (!exists(file)) return { state: 'none' };
   const drop = () => { if (!dryRun) fs.rmSync(file, { force: true }); };
@@ -392,13 +514,16 @@ export async function maybePendingContinue(cfg, log, io) {
     log.info('pending continue: the host is not listening; will try again next run');
     return { state: 'host-down' };
   }
-  const max = cfg.watch.pendingContinueMaxTries;
+  // A missing sign-in can last until someone is back at the machine, so it gets more tries.
+  const auth = p.reason === 'auth';
+  const max = auth ? cfg.watch.pendingContinueAuthMaxTries : cfg.watch.pendingContinueMaxTries;
   const tries = Number(p.tries) || 0;
   if (tries >= max) {
     log.warn(`pending continue: gave up after ${tries} tries`);
     if (dryRun) return { state: 'would-give-up', tries };
     writeJsonAtomic(file, { ...p, gave_up: true });
-    await tell('Agent log trimmed: resume needed', `The automatic continue after the ${p.trimmed_at} trim failed on ${tries} later tries. Open the session and send: continue from the latest handoff addendum. See ${cfg.logFile}.`);
+    const why = auth ? 'each failed because the agent host has no Copilot sign-in. Open VS Code, then open the session and' : 'Open the session and';
+    await tell('Agent log trimmed: resume needed', `The automatic continue after the ${p.trimmed_at} trim failed on ${tries} later tries; ${why} send: continue from the latest handoff addendum. See ${cfg.logFile}.`);
     return { state: 'gave-up-now', tries };
   }
   if (dryRun) {
@@ -406,12 +531,21 @@ export async function maybePendingContinue(cfg, log, io) {
     return { state: 'would-send', tries };
   }
   writeJsonAtomic(file, { ...p, tries: tries + 1, last_try: nowIso() });
+  const sentAt = Date.now();
   const r = await send(p.ahp_session, pendingText(cfg, p.trimmed_at));
   log.info(`pending continue try ${tries + 1}: ${r.ok ? 'ok' : 'failed'}: ${r.detail}`);
   if (!r.ok) {
     // A failed attempt can still load the session and write to its log; that is not a hand resume.
     writeJsonAtomic(file, { ...p, tries: tries + 1, last_try: nowIso(), log_mtime_ms: logMtime(p.session_dir) });
     return { state: 'failed', tries: tries + 1 };
+  }
+  const turn = await outcome(p.session_dir, sentAt);
+  if (turn.outcome === 'auth') {
+    // Taken, but the host still has no sign-in: still owed. The failed turn's own writes are not a hand resume.
+    writeJsonAtomic(file, { ...p, reason: 'auth', tries: tries + 1, last_try: nowIso(), log_mtime_ms: logMtime(p.session_dir) });
+    log.warn('pending continue: the turn failed because the host has no Copilot sign-in; will try again next run');
+    if (!auth) await tell('Agent log trimmed but not resumed: Copilot sign-in missing', authAdvice(cfg));
+    return { state: 'auth', tries: tries + 1 };
   }
   fs.rmSync(file, { force: true });
   await tell('Agent resumed after its log trim', `The continue after the ${p.trimmed_at} trim went through on a later try. No action needed.`);

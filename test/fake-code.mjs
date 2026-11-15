@@ -10,6 +10,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { startFakeAhp } from './fake-ahp-server.mjs';
+import { continueTurnLines } from './helpers.mjs';
 
 const argv = process.argv.slice(2);
 const si = argv.indexOf('--state');
@@ -35,7 +36,12 @@ if (args[0] === '--version') {
   const dir = path.dirname(stateFile);
   const server = await startFakeAhp({
     port, token, sessionUri: s.ahpSession, workingDirectories: [s.repoUri], behavior: s.ahpBehavior,
-    onTurn: (a) => fs.appendFileSync(path.join(dir, 'received.jsonl'), JSON.stringify(a) + '\n'),
+    onTurn: (a) => {
+      fs.appendFileSync(path.join(dir, 'received.jsonl'), JSON.stringify(a) + '\n');
+      // state.turnEvents ('auth' | 'working' | ...): what the accepted turn writes to the session log.
+      const kind = read().turnEvents;
+      if (kind && read().ahpBehavior !== 'reject') fs.appendFileSync(path.join(s.sessionDir, 'events.jsonl'), continueTurnLines(kind, Date.now(), 110));
+    },
   });
   // The fake copilot-runtime: a child that holds the session lock until the host tree is killed.
   const rt = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1 << 30)'], { stdio: 'ignore' });

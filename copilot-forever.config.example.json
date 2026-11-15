@@ -26,7 +26,9 @@
     "continueRetrySeconds": 30,
     "continueTimeoutSeconds": 180,
     "staleHostMinutes": 30,
-    "pendingContinueMaxTries": 6
+    "pendingContinueMaxTries": 6,
+    "turnOutcomeSeconds": 90,
+    "pendingContinueAuthMaxTries": 144
   },
   "files": {
     "status": "logs/session-log-status.json",
