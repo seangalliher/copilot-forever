@@ -121,8 +121,11 @@ export async function maybeResume(cfg, log, { hostInfo, session, ahpSession, dry
   if (st.gave_up) return { state: 'gave-up' };
   const quietMin = (now - fs.statSync(events).mtimeMs) / 60000;
   if (quietMin < r.quietMinutes) return { state: 'wait', reason: `the log was written ${Math.round(quietMin)} min ago` };
-  const busy = notIdleReason(cfg, hostInfo, session, now);
-  if (busy) { log.info(`network resume: waiting (${busy})`); return { state: 'wait', reason: busy }; }
+  // Not notIdleReason: a turn that dies on an error writes no assistant.turn_end, and the host keeps
+  // listing the session as active, so that check never passes here (seen live: a DNS error left a
+  // session idle 3.7 h with every run logging "waiting"). resumeCandidate already requires that
+  // nothing happened after the error and the log is quiet; the continue itself is refused while
+  // the chat has a turn in progress (src/ahp.mjs).
   if (st.last_try && (now - Date.parse(st.last_try)) / 60000 < r.retryMinutes) return { state: 'wait', reason: 'retry interval' };
   if (st.tries >= r.maxTries || st.recent.length >= r.maxPerDay) {
     const why = st.tries >= r.maxTries ? `${st.tries} tries for error ${c.error.id}` : `${st.recent.length} resumes in 24 hours`;

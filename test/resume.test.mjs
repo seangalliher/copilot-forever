@@ -117,6 +117,17 @@ test('maybeResume: sends one continue, waits out the retry interval, then gives 
   assert.equal(notes.length, 3, 'the give-up notification is shown once');
 });
 
+test('maybeResume: resumes a turn that died on the error, though the host still lists the session as active', async () => {
+  // As on a real host: the failed turn writes no assistant.turn_end, and the host keeps listing
+  // the session as active. Both used to hold network resume back for good.
+  const now = T0 + 20 * 60000;
+  const died = [ev('user.message', 1), ev('assistant.turn_start', 2), ev('assistant.message', 3), errEv(DNS)];
+  const x = setup('died', died);
+  x.o.hostInfo = { sessions: [{ workingDirectories: [x.cfg.repoFolder], resource: 'ahp-session:/x' }] };
+  assert.equal((await maybeResume(x.cfg, logger(), { ...x.o, now })).state, 'resumed');
+  assert.equal(x.sent.length, 1);
+});
+
 test('maybeResume: waits while the API is down, and never sends after an excluded error or a busy session', async () => {
   const now = T0 + 20 * 60000;
   const down = setup('down', [...turn(), errEv(DNS)], { port: closedPort });
@@ -130,10 +141,16 @@ test('maybeResume: waits while the API is down, and never sends after an exclude
   assert.equal(auth.sent.length, 0);
   assert.equal(log.lines.filter((l) => /not resuming/.test(l)).length, 1, 'a skipped error is logged once');
 
-  const busy = setup('busy', [...turn(), errEv(DNS)]);
-  busy.o.hostInfo = { sessions: [{ workingDirectories: [busy.cfg.repoFolder], resource: 'ahp-session:/x' }] };
-  assert.equal((await maybeResume(busy.cfg, logger(), { ...busy.o, now })).state, 'wait');
+  // A session that has worked since the error is busy or resumed: no send.
+  const busy = setup('busy', [...turn(), errEv(DNS), ev('assistant.turn_start', 9, {}, T0 + 60000)]);
+  assert.equal((await maybeResume(busy.cfg, logger(), { ...busy.o, now })).state, 'skip');
   assert.equal(busy.sent.length, 0);
+  // The log written recently: wait.
+  const fresh = setup('fresh', [...turn(), errEv(DNS)]);
+  const recent = (now - 5 * 60000) / 1000;
+  fs.utimesSync(fresh.file, recent, recent);
+  assert.equal((await maybeResume(fresh.cfg, logger(), { ...fresh.o, now })).state, 'wait');
+  assert.equal(fresh.sent.length, 0);
 
   const off = setup('off', [...turn(), errEv(DNS)]);
   off.cfg.resume.enabled = false;

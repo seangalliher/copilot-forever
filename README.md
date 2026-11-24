@@ -111,7 +111,7 @@ On every run with no trim request, the watcher also checks the end of the sessio
 
 - The last turn ended in a `session.error` whose message is a network error (DNS, `ECONNREFUSED`, `ECONNRESET`, a timeout, 500/502/503/504), and the session hasn't worked since.
 - The error isn't an auth, quota, rate-limit, content-policy or cancel error, or anything unrecognised. Those need you; the watcher logs once that it won't resume and leaves the session alone.
-- The error is at least `resume.quietMinutes` old, the log has been quiet that long, and the session is idle on the host.
+- The error is at least `resume.quietMinutes` old, and the log has been quiet that long. The host's session listing is not checked: a turn that dies on an error never writes `assistant.turn_end`, and the host can keep listing the session as active, so that check would never pass (seen live: a DNS error left a session idle 3.7 hours with every run "waiting"). The send itself still refuses if the chat has a turn in progress.
 - The model API's host (taken from the error message) resolves and accepts a connection. While it doesn't, the watcher just checks again next run.
 
 The message tells the agent when the error happened and to check where it was (git state, running work, the handoff) before resuming. Each error gets at most `resume.maxTries` continues, `resume.retryMinutes` apart, and there are at most `resume.maxPerDay` continues across all errors in 24 hours, so an API that accepts connections but fails every turn can't cause an endless loop. After that one notification asks you to step in. Set `resume.enabled` to `false` to turn it off.
